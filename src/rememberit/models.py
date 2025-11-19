@@ -13,6 +13,19 @@ if TYPE_CHECKING:  # pragma: no cover
 
 
 @dataclass
+class OperationResult:
+    """Result of a deck/card operation with user-friendly display."""
+    message: str
+    status_code: int = 200
+
+    def __repr__(self) -> str:
+        return self.message
+
+    def _repr_html_(self) -> str:
+        return f"<div>{self.message}</div>"
+
+
+@dataclass
 class DeckListResult:
     top_node: Optional[DeckNode]
     current_deck_id: Optional[int]
@@ -150,11 +163,21 @@ class Deck:
         self.path = str(row.get("path") or self.path)
 
     def sync(self):
+        """Refresh this deck's cards by re-syncing the entire collection."""
         if not self._client:
             raise RuntimeError("No client attached to deck")
-        self.cards = CardCollection(self._client.search_cards(f"deck:{self.path or self.name}", deck=self))
-        for card in self.cards:
-            card.deck = self
+        # Re-sync entire collection to get fresh data
+        collection = self._client.sync()
+        # Find this deck in the refreshed collection
+        for deck in collection:
+            if deck.id == self.id or deck.name == self.name:
+                # Update this deck's cards with the refreshed data
+                self.cards = deck.cards
+                for card in self.cards:
+                    card.deck = self
+                return self
+        # If deck not found, return with empty cards
+        self.cards = CardCollection([])
         return self
 
     def add_card(self, front: str, back: str, tags: str = "", model_id: Optional[int] = None):
@@ -166,12 +189,15 @@ class Deck:
     def delete(self):
         if not self._client:
             raise RuntimeError("No client attached to deck")
-        return self._client.remove_deck(self)
+        result = self._client.remove_deck(self)
+        return OperationResult(f"✓ {self.name} deleted", result.get("status_code", 200))
 
     def rename(self, new_name: str):
         if not self._client:
             raise RuntimeError("No client attached to deck")
-        return self._client.rename_deck(self, new_name)
+        old_name = self.name
+        result = self._client.rename_deck(self, new_name)
+        return OperationResult(f"✓ {old_name} renamed to {new_name}", result.get("status_code", 200))
 
     def save_json(self, path: str):
         """
@@ -194,6 +220,29 @@ class Deck:
         }
         file_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         return file_path
+
+    def to_dict(self):
+        """
+        Export deck cards as a dictionary for AI processing.
+        Returns: {"name": str, "cards": [{"front": str, "back": str}, ...]}
+        """
+        return {
+            "name": self.name,
+            "cards": [
+                {
+                    "front": card.front,
+                    "back": card.back,
+                }
+                for card in self.cards
+            ],
+        }
+
+    def json(self, indent: int = 2):
+        """
+        Export deck cards as a JSON string.
+        Perfect for printing or passing to AI for editing.
+        """
+        return json.dumps(self.to_dict(), ensure_ascii=False, indent=indent)
 
     def save_apkg(self, path: str, model_id: int = 1763445109221):
         """

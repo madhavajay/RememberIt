@@ -39,6 +39,10 @@ DEFAULT_USER_AGENT = (
     "Chrome/142.0.0.0 Safari/537.36"
 )
 
+SYNC_BASE_URL = "https://sync12.ankiweb.net"
+SYNC_PROTOCOL_VERSION = 11
+SYNC_CLIENT_STRING = "25.09.2,3890e12c,macos"
+
 
 class RememberItError(Exception):
     """Custom error class for RememberIt operations."""
@@ -122,46 +126,6 @@ class RememberItClient:
         if persist:
             save_settings(self.settings)
 
-    def login(self, email: str, password: str, *, persist: bool = True) -> Dict[str, Any]:
-        """Log in to AnkiWeb with credentials and persist them."""
-        self.settings.email = email
-        self.settings.password = password
-        if persist:
-            save_settings(self.settings)
-
-        # Grab a fresh session cookie first
-        self._request("GET", "/account/login")
-
-        payload = f"{email} {password}".encode("utf-8")
-        headers = {
-            "Content-Type": "application/octet-stream",
-            "Origin": self.base_url,
-            "Referer": f"{self.base_url}/account/login",
-            "Accept": "*/*",
-            "Accept-Language": "en-US,en;q=0.9",
-        }
-
-        response = self._request(
-            "POST",
-            "/svc/account/login",
-            content=payload,
-            headers=headers,
-        )
-
-        return {"status_code": response.status_code, "url": str(response.url)}
-
-    def sync(self) -> Dict[str, Any]:
-        """
-        Trigger a sync with AnkiWeb.
-
-        The exact endpoint can change; this method uses a common sync path but may need
-        adjustment once we inspect live responses.
-        """
-        response = self._request("GET", "/sync/")
-        try:
-            return response.json()
-        except ValueError:
-            return {"status_code": response.status_code, "content": response.text}
 
     def get_decks(self) -> Any:
         """
@@ -199,24 +163,8 @@ class RememberItClient:
         return self.get_decks()
 
     def sync(self) -> DeckCollection:
-        """
-        Load all decks and their cards into local objects for notebook-friendly access.
-        """
-        deck_list = self.get_decks()
-        decks: list[Deck] = []
-
-        for row in deck_list.decks_flat:
-            deck = self._deck_cache.get(self._deck_key(row)) or Deck.from_row(row, client=self)
-            deck.update_from_row(row)
-            decks.append(deck)
-
-        # Populate cards per deck (one search call per deck)
-        for deck in decks:
-            deck.cards = CardCollection(self.search_cards(f"deck:{deck.path or deck.name}", deck=deck))
-
-        self._deck_cache = {self._deck_key_from_deck(d): d for d in decks}
-        self._deck_order = [self._deck_key_from_deck(d) for d in decks]
-        return DeckCollection(decks, client=self)
+        """Download all decks and cards using the sync protocol."""
+        return self.full_sync()
 
     def decks(self) -> DeckCollection:
         """Return cached decks, syncing if we have nothing yet."""
@@ -225,35 +173,301 @@ class RememberItClient:
         ordered = [self._deck_cache[k] for k in self._deck_order if k in self._deck_cache]
         return DeckCollection(ordered, client=self)
 
-    def sync_host_key(self, email: str, password: str) -> str:
-        """
-        Perform sync login (/sync/hostKey) to obtain a sync key for the collection sync protocol.
-        WARNING: sends credentials directly to sync12.ankiweb.net.
-        """
-        sync_url = "https://sync12.ankiweb.net/sync/hostKey"
-        sync_header = {
-            "v": 11,
-            "k": "",
-            "c": "25.09.2,rememberit-sync,python-httpx",
-            "s": secrets.token_urlsafe(4),
-        }
-        headers = {
-            "anki-sync": json.dumps(sync_header),
-            "Content-Type": "application/octet-stream",
-            "Accept": "*/*",
-        }
-        body = json.dumps({"u": email, "p": password}).encode("utf-8")
-        gz_body = gzip.compress(body)
-        resp = httpx.post(sync_url, headers=headers, content=gz_body, timeout=15.0)
+    def login(self, email: str, password: str, *, persist: bool = True) -> str:
+        """Authenticate with Anki sync server and return sync key."""
+        import zstandard as zstd
+
+        payload = {"u": email, "p": password}
+        headers = self._build_sync_headers()
+        # Use zstd compression (not gzip) and compact JSON
+        json_bytes = json.dumps(payload, separators=(',', ':')).encode("utf-8")
+        cctx = zstd.ZstdCompressor()
+        body = cctx.compress(json_bytes)
+
+        resp = httpx.post(
+            f"{SYNC_BASE_URL}/sync/hostKey",
+            headers=headers,
+            content=body,
+            timeout=15.0,
+        )
         resp.raise_for_status()
-        try:
-            data = json.loads(gzip.decompress(resp.content))
-        except Exception as err:
-            raise RememberItError(f"Failed to decode sync hostKey response: {err}") from err
+
+        # Response has zstd frame header followed by plain JSON
+        # Extract JSON after the frame header (typically ~9 bytes)
+        if b'{"key"' in resp.content:
+            json_start = resp.content.find(b'{"key"')
+            json_bytes_resp = resp.content[json_start:]
+            json_end = json_bytes_resp.find(b'}') + 1
+            json_str = json_bytes_resp[:json_end].decode('utf-8')
+            data = json.loads(json_str)
+        else:
+            # Fallback to full zstd decode if format is different
+            try:
+                dctx = zstd.ZstdDecompressor()
+                decompressed = dctx.decompress(resp.content)
+                data = json.loads(decompressed)
+            except Exception:
+                data = self._decode_sync_json(resp.content)
+
         key = data.get("key")
         if not key:
             raise RememberItError("Sync hostKey response missing 'key'")
+
+        # Save credentials and key
+        if persist:
+            self.settings.email = email
+            self.settings.password = password
+            self.settings.sync_key = key
+            save_settings(self.settings)
+
         return key
+
+    def get_sync_key(self) -> str | None:
+        """Return cached sync key if available."""
+        return self.settings.sync_key or None
+
+    def logout(self) -> None:
+        """Clear sync key and credentials."""
+        self.settings.sync_key = ""
+        self.settings.email = ""
+        self.settings.password = ""
+        save_settings(self.settings)
+
+    def reset(self) -> None:
+        """Delete all RememberIt data from ~/.rememberit folder."""
+        from .config import _config_dir
+        import shutil
+
+        config_dir = _config_dir()
+        if config_dir.exists():
+            shutil.rmtree(config_dir)
+        # Reset in-memory settings
+        self.settings = Settings()
+        self._deck_cache = {}
+        self._deck_order = []
+
+    # --- Minimal sync inspection helpers (v11) ---------------------------------
+    def _build_sync_headers(self, sync_key: str | None = None) -> Dict[str, str]:
+        header = {
+            "v": SYNC_PROTOCOL_VERSION,
+            "k": sync_key or "",
+            "c": SYNC_CLIENT_STRING,
+            "s": secrets.token_urlsafe(4),
+        }
+        return {
+            "anki-sync": json.dumps(header, separators=(',', ':')),  # Compact JSON
+            "Content-Type": "application/octet-stream",
+            "Accept": "*/*",
+            "User-Agent": self.settings.user_agent or DEFAULT_USER_AGENT,
+        }
+
+    def _decode_sync_json(self, payload: bytes) -> Dict[str, Any]:
+        import zstandard as zstd
+
+        errors: list[str] = []
+        for attempt in ("zstd", "zstd-partial", "gzip", "plain"):
+            try:
+                if attempt == "zstd":
+                    dctx = zstd.ZstdDecompressor()
+                    text = dctx.decompress(payload).decode("utf-8")
+                elif attempt == "zstd-partial":
+                    # Response may have zstd frame header + plain JSON
+                    if b'{"' in payload or b'[' in payload:
+                        json_start = max(payload.find(b'{"'), payload.find(b'['))
+                        if json_start > 0:
+                            text = payload[json_start:].decode("utf-8", errors="ignore")
+                        else:
+                            continue
+                    else:
+                        continue
+                elif attempt == "gzip":
+                    text = gzip.decompress(payload).decode("utf-8")
+                else:
+                    text = payload.decode("utf-8")
+                return json.loads(text)
+            except Exception as err:  # noqa: BLE001 - bubble errors after attempts
+                errors.append(f"{attempt}: {err}")
+        raise RememberItError(f"Failed to decode sync JSON payload ({'; '.join(errors)})")
+
+    def _maybe_gunzip(self, payload: bytes) -> bytes:
+        import zstandard as zstd
+
+        # Try zstd first (protocol v11+)
+        try:
+            dctx = zstd.ZstdDecompressor()
+            return dctx.decompress(payload, max_output_size=50 * 1024 * 1024)  # 50MB max
+        except Exception:
+            pass
+        # Fall back to gzip
+        try:
+            return gzip.decompress(payload)
+        except Exception:
+            return payload
+
+    def _sync_request(self, path: str, sync_key: str, payload_obj: Dict[str, Any]) -> bytes:
+        """Send a zstd-compressed JSON payload to /sync/* and return decompressed bytes."""
+        import zstandard as zstd
+
+        sync_url = f"{SYNC_BASE_URL}{path}"
+        headers = self._build_sync_headers(sync_key)
+        # Use zstd compression and compact JSON
+        json_bytes = json.dumps(payload_obj, separators=(',', ':')).encode("utf-8")
+        cctx = zstd.ZstdCompressor()
+        body = cctx.compress(json_bytes)
+        resp = httpx.post(sync_url, headers=headers, content=body, timeout=20.0)
+        resp.raise_for_status()
+        return self._maybe_gunzip(resp.content)
+
+    def sync_meta_raw(self, sync_key: str, client_version: str = "anki,25.09.2 (3890e12c),mac:15.5") -> bytes:
+        """Call /sync/meta and return decompressed raw bytes."""
+        payload = {"v": SYNC_PROTOCOL_VERSION, "cv": client_version}
+        return self._sync_request("/sync/meta", sync_key, payload)
+
+    def sync_start_raw(self, sync_key: str, min_usn: int = 0, lnewer: bool = True, graves: Any = None) -> bytes:
+        """Call /sync/start with simple JSON body (graves can be null)."""
+        payload = {"minUsn": min_usn, "lnewer": lnewer, "graves": graves}
+        return self._sync_request("/sync/start", sync_key, payload)
+
+    def _sync_apply_changes(self, sync_key: str) -> Dict[str, Any]:
+        """Call /sync/applyChanges with empty local changes to get server's decks/notetypes."""
+        payload = {
+            "changes": {
+                "models": [],
+                "decks": [[], []],  # DecksAndConfig: [decks, config]
+                "tags": [],
+            }
+        }
+        resp_bytes = self._sync_request("/sync/applyChanges", sync_key, payload)
+        return self._decode_sync_json(resp_bytes)
+
+    def _sync_chunk(self, sync_key: str) -> Dict[str, Any]:
+        """Call /sync/chunk to get a chunk of cards/notes."""
+        payload = {"_pad": None}  # EmptyInput
+        resp_bytes = self._sync_request("/sync/chunk", sync_key, payload)
+        return self._decode_sync_json(resp_bytes)
+
+    def _sync_finish(self, sync_key: str) -> int:
+        """Call /sync/finish to complete sync."""
+        payload = {"_pad": None}  # EmptyInput
+        resp_bytes = self._sync_request("/sync/finish", sync_key, payload)
+        # Returns TimestampMillis - try to decode as JSON first
+        try:
+            result = self._decode_sync_json(resp_bytes)
+            return int(result) if not isinstance(result, dict) else 0
+        except Exception:
+            # Fallback to plain text
+            return int(resp_bytes.decode("utf-8").strip())
+
+    def full_sync(self) -> DeckCollection:
+        """Download entire collection using /sync/download and parse SQLite."""
+        if not self.settings.sync_key:
+            raise RememberItError("Not logged in. Call login() first.")
+
+        import sqlite3
+        import tempfile
+        from pathlib import Path
+
+        sync_key = self.settings.sync_key
+
+        # Download the full collection as SQLite database
+        payload = {"_pad": None}  # EmptyInput
+        db_bytes = self._sync_request("/sync/download", sync_key, payload)
+
+        # Write to temporary file and open as SQLite
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".anki2") as tmp:
+            tmp.write(db_bytes)
+            tmp_path = tmp.name
+
+        try:
+            conn = sqlite3.connect(tmp_path)
+            conn.row_factory = sqlite3.Row
+
+            # Get all decks (from separate decks table in newer schema)
+            deck_map: Dict[int, Dict[str, Any]] = {}
+            try:
+                # Try newer schema with decks table
+                for row in conn.execute("SELECT id, name FROM decks"):
+                    deck_id = row["id"]
+                    deck_name = row["name"]
+                    deck_map[deck_id] = {
+                        "id": deck_id,
+                        "name": deck_name,
+                        "path": deck_name,
+                    }
+            except sqlite3.OperationalError:
+                # Fall back to older schema with decks column in col table
+                decks_json = conn.execute("SELECT decks FROM col").fetchone()[0]
+                if decks_json:
+                    decks_data = json.loads(decks_json)
+                    for deck_id_str, deck_info in decks_data.items():
+                        deck_id = int(deck_id_str)
+                        deck_map[deck_id] = {
+                            "id": deck_id,
+                            "name": deck_info.get("name", ""),
+                            "path": deck_info.get("name", ""),
+                        }
+
+            # Get all notes
+            note_map: Dict[int, Dict[str, Any]] = {}
+            for row in conn.execute("SELECT id, flds FROM notes"):
+                note_id = row["id"]
+                fields = row["flds"]  # Fields separated by \x1f
+                note_map[note_id] = {"id": note_id, "fields": fields}
+
+            # Get all cards and group by deck
+            deck_cards: Dict[int, list[Card]] = {}
+            for row in conn.execute("SELECT id, nid, did FROM cards"):
+                card_id = row["id"]
+                note_id = row["nid"]
+                deck_id = row["did"]
+
+                # Get note fields
+                note = note_map.get(note_id, {})
+                fields = note.get("fields", "").split("\x1f")
+                front = fields[0] if len(fields) > 0 else ""
+                back = fields[1] if len(fields) > 1 else ""
+
+                card = Card(
+                    id=card_id,
+                    front=front,
+                    back=back,
+                    raw_text=f"{front}\x1f{back}",
+                    edit_url=f"{ANKIWEB_BASE_URL}/edit/{note_id}",
+                    deck=None,
+                    _client=self,
+                )
+
+                if deck_id not in deck_cards:
+                    deck_cards[deck_id] = []
+                deck_cards[deck_id].append(card)
+
+            conn.close()
+
+            # Create Deck objects
+            decks: list[Deck] = []
+            for deck_id, deck_info in deck_map.items():
+                cards = CardCollection(deck_cards.get(deck_id, []))
+                deck = Deck(
+                    id=deck_id,
+                    name=deck_info["name"],
+                    path=deck_info["path"],
+                    counts={"total": len(cards)},
+                    cards=cards,
+                    _client=self,
+                )
+                for card in cards:
+                    card.deck = deck
+                decks.append(deck)
+
+            # Cache the decks
+            self._deck_cache = {self._deck_key_from_deck(d): d for d in decks}
+            self._deck_order = [self._deck_key_from_deck(d) for d in decks]
+
+            return DeckCollection(decks, client=self)
+
+        finally:
+            # Clean up temporary file
+            Path(tmp_path).unlink(missing_ok=True)
 
     def search_cards(self, query: str, deck: Deck | None = None) -> list[Card]:
         payload = encode_search_request(query)
@@ -333,68 +547,42 @@ class RememberItClient:
             )
         ]
 
-    def get_deck(self, deck_id: str) -> Any:
-        response = self._request("GET", f"/api/decks/{deck_id}")
-        try:
-            return response.json()
-        except ValueError as err:  # pragma: no cover - defensive
-            raise RememberItError("Unexpected response format for deck") from err
-
-    def update_deck(self, deck_id: str, payload: Dict[str, Any]) -> Any:
-        response = self._request("PATCH", f"/api/decks/{deck_id}", json=payload)
-        try:
-            return response.json()
-        except ValueError:
-            return {"status_code": response.status_code, "content": response.text}
-
-    def delete_deck(self, deck_id: str) -> Dict[str, Any]:
-        response = self._request("DELETE", f"/api/decks/{deck_id}")
-        return {"status_code": response.status_code}
-
     def add_card(
         self, deck_id: int, front: str, back: str, tags: str = "", model_id: Optional[int] = None
     ) -> Dict[str, Any]:
-        # model_id is required by server; fall back to typical Basic (and reversed card) id if not provided
+        """Add a card by modifying the collection and uploading."""
+        import time
+        import uuid
+
         model = model_id if model_id is not None else DEFAULT_MODEL_ID
-        payload = encode_add_or_update_request(
-            front=front, back=back, tags=tags, model_id=model, deck_id=deck_id
-        )
-        primary = "https://ankiuser.net"
-        headers = {
-            "Content-Type": "application/octet-stream",
-            "Origin": primary,
-            "Referer": f"{primary}/add",
-            "Accept": "*/*",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Cache-Control": "no-cache",
-            "Pragma": "no-cache",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-origin",
-            "Sec-CH-UA": '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
-            "Sec-CH-UA-Mobile": "?0",
-            "Sec-CH-UA-Platform": '"macOS"',
-        }
-        try:
-            response = self._request(
-                "POST",
-                f"{primary}/svc/editor/add-or-update",
-                content=payload,
-                headers=headers,
+
+        def add_note_and_card(conn):
+            # Generate IDs
+            now = int(time.time())
+            now_ms = int(time.time() * 1000)
+            note_id = now_ms
+            card_id = now_ms + 1
+            guid = str(uuid.uuid4())[:8]  # Short GUID like Anki uses
+
+            # Fields separated by \x1f
+            fields = f"{front}\x1f{back}"
+
+            # Insert note
+            conn.execute(
+                """INSERT INTO notes (id, guid, mid, mod, usn, tags, flds, sfld, csum, flags, data)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (note_id, guid, model, now, -1, tags, fields, "", 0, 0, "")
             )
-        except RememberItError as err:
-            # If primary host returns 404, retry on ankiweb.net as a fallback.
-            if "404" in str(err):
-                fallback = ANKIWEB_BASE_URL
-                response = self._request(
-                    "POST",
-                    f"{fallback}/svc/editor/add-or-update",
-                    content=payload,
-                    headers={**headers, "Origin": fallback, "Referer": f"{fallback}/add"},
-                )
-            else:
-                raise
-        return {"status_code": response.status_code}
+
+            # Insert card (ord=0 for first template, queue=0 for new, type=0 for learning)
+            conn.execute(
+                """INSERT INTO cards (id, nid, did, ord, mod, usn, type, queue, due, ivl, factor, reps, lapses, left, odue, odid, flags, data)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (card_id, note_id, deck_id, 0, now, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "")
+            )
+
+        self._modify_and_upload_collection(add_note_and_card)
+        return {"status_code": 200}
 
     def remove_deck(self, deck: Deck | str | int) -> Dict[str, Any]:
         """
@@ -458,19 +646,86 @@ class RememberItClient:
         self._deck_order = [new_key if k == old_key else k for k in self._deck_order]
         return {"status_code": response.status_code}
 
+    def _modify_and_upload_collection(self, modifier_fn):
+        """Download collection, modify it via callback, and upload back."""
+        import sqlite3
+        import tempfile
+        from pathlib import Path
+        import time
+
+        if not self.settings.sync_key:
+            raise RememberItError("Not logged in. Call login() first.")
+
+        sync_key = self.settings.sync_key
+
+        # Download current collection
+        payload = {"_pad": None}
+        db_bytes = self._sync_request("/sync/download", sync_key, payload)
+
+        # Write to temp file and modify
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".anki2", mode="wb") as tmp:
+            tmp.write(db_bytes)
+            tmp_path = tmp.name
+
+        try:
+            conn = sqlite3.connect(tmp_path)
+
+            # Register Anki's custom collation for case-insensitive comparison
+            conn.create_collation("unicase", lambda x, y: (x.lower() > y.lower()) - (x.lower() < y.lower()))
+
+            # Call modifier function to make changes
+            modifier_fn(conn)
+
+            # Update collection modified timestamp
+            conn.execute("UPDATE col SET mod = ?", (int(time.time() * 1000),))
+            conn.commit()
+            conn.close()
+
+            # Read modified database
+            with open(tmp_path, "rb") as f:
+                modified_db = f.read()
+
+            # Upload modified collection
+            import zstandard as zstd
+            cctx = zstd.ZstdCompressor()
+            compressed = cctx.compress(modified_db)
+
+            headers = self._build_sync_headers(sync_key)
+            headers["Content-Type"] = "application/octet-stream"
+
+            resp = httpx.post(
+                f"{SYNC_BASE_URL}/sync/upload",
+                headers=headers,
+                content=compressed,
+                timeout=60.0,
+            )
+            resp.raise_for_status()
+
+            # Clear cache and resync
+            self._deck_cache = {}
+            self._deck_order = []
+            return self.sync()
+
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
     def create_deck(self, name: str) -> Deck:
-        """
-        Create a new deck via /svc/decks/create-deck (protobuf), then resync and return it.
-        """
-        payload = encode_create_deck_request(name)
-        headers = {
-            "Content-Type": "application/octet-stream",
-            "Origin": self.base_url,
-            "Referer": f"{self.base_url}/decks",
-            "Accept": "*/*",
-        }
-        self._request("POST", "/svc/decks/create-deck", content=payload, headers=headers)
-        collection = self.sync()
+        """Create a new deck by modifying the collection and uploading."""
+        import time
+
+        def add_deck(conn):
+            # Generate new deck ID (timestamp in milliseconds)
+            deck_id = int(time.time() * 1000)
+
+            # Insert into decks table with proper protobuf blobs
+            # common: minimal protobuf structure for deck settings
+            # kind: b'\n\x02\x08\x01' for normal deck (not filtered)
+            conn.execute(
+                "INSERT INTO decks (id, name, mtime_secs, usn, common, kind) VALUES (?, ?, ?, ?, ?, ?)",
+                (deck_id, name, int(time.time()), -1, b'\x08\x01\x10\x01', b'\n\x02\x08\x01')
+            )
+
+        collection = self._modify_and_upload_collection(add_deck)
         try:
             return collection[name]
         except Exception:
@@ -657,6 +912,12 @@ class RememberItClient:
         **kwargs: Any,
     ) -> httpx.Response:
         merged_headers = headers.copy() if headers else {}
+
+        # Add anki-sync header with sync key if we have one
+        if self.settings.sync_key and "anki-sync" not in {k.lower() for k in merged_headers}:
+            sync_header = self._build_sync_headers(self.settings.sync_key)
+            merged_headers["anki-sync"] = sync_header["anki-sync"]
+
         # Host-specific cookie support
         host = ""
         if isinstance(url, str):
@@ -686,6 +947,16 @@ class RememberItClient:
         except httpx.HTTPStatusError as err:
             # Log the failed exchange for debugging
             self._log_exchange(method, url, merged_headers, kwargs, err.response)
+            # Provide helpful message for 403 errors
+            if err.response.status_code == 403:
+                msg = (
+                    "AnkiWeb API requires browser cookies. "
+                    "Login to ankiweb.net in your browser, then:\n"
+                    '  1. Open DevTools (F12) → Application → Cookies\n'
+                    '  2. Copy the "ankiweb" cookie value\n'
+                    '  3. Run: rememberit.set_cookie_header_ankiweb("ankiweb=<value>; has_auth=1")'
+                )
+                raise RememberItError(msg) from err
             raise RememberItError(
                 f"AnkiWeb request failed: {err.response.status_code} {err.response.reason_phrase}"
             ) from err

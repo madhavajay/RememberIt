@@ -15,6 +15,7 @@ ENV_CONFIG_DIR = "REMEMBERIT_CONFIG_DIR"
 class Settings:
     email: str = ""
     password: str = ""
+    sync_key: str = ""
     user_agent: str = ""
     cookie_header: str = ""
     cookie_header_ankiweb: str = ""
@@ -47,6 +48,7 @@ def load_settings(path: Path | None = None) -> Settings:
     return Settings(
         email=raw.get("email", ""),
         password=raw.get("password", ""),
+        sync_key=raw.get("sync_key", ""),
         user_agent=raw.get("user_agent", ""),
         cookie_header=raw.get("cookie_header", ""),
         cookie_header_ankiweb=raw.get("cookie_header_ankiweb", ""),
