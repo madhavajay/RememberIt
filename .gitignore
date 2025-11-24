@@ -1,0 +1,10 @@
+/target
+/dist
+/python/*.egg-info
+/python/__pycache__/
+
+**/__pycache__/*
+.claude/*
+**/.ipynb_checkpoints/*
+
+.coverage

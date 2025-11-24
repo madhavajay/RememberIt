@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, Mapping
+from collections.abc import Iterable, Mapping
 
 
 def decks_markdown_table(flat_decks: Iterable[Mapping[str, object]]) -> str:
@@ -14,9 +14,5 @@ def decks_markdown_table(flat_decks: Iterable[Mapping[str, object]]) -> str:
         "|" + "|".join("---" for _ in headers) + "|",
     ]
     for row in flat_decks:
-        lines.append(
-            "|"
-            + "|".join(str(row.get(col, "")) for col in headers)
-            + "|"
-        )
+        lines.append("|" + "|".join(str(row.get(col, "")) for col in headers) + "|")
     return "\n".join(lines)

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
-from pathlib import Path
 import json
 import os
-from typing import Any, Dict
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
 
 DEFAULT_CONFIG_DIRNAME = ".rememberit"
 DEFAULT_CONFIG_FILENAME = "settings.json"
@@ -41,7 +41,7 @@ def load_settings(path: Path | None = None) -> Settings:
 
     with target.open("r", encoding="utf-8") as fh:
         try:
-            raw: Dict[str, Any] = json.load(fh)
+            raw: dict[str, Any] = json.load(fh)
         except json.JSONDecodeError:
             return Settings()
 

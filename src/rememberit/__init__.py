@@ -1,306 +1,202 @@
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
+
 from .client import (
-    DEFAULT_USER_AGENT,
-    DEFAULT_MODEL_ID,
-    ANKIWEB_BASE_URL,
     RememberItClient,
     RememberItError,
-    Deck,
+    Session,
+    add_demo,
+    list_decks_and_cards,
+    load_session,
 )
 from .config import Settings, config_path, load_settings, save_settings
-from .formatting import decks_markdown_table
-from .proto import DeckNode
-from .models import DeckListResult, CardSummary, DeckCollection, Card, CardCollection, OperationResult
+from .models import (
+    Card,
+    CardCollection,
+    CardSummary,
+    Deck,
+    DeckCollection,
+    DeckListResult,
+    OperationResult,
+)
 
-__version__ = "0.1.3"
+__version__ = "0.1.0"
 
 _client = RememberItClient()
 
 
-def login(email: str, password: str, *, persist: bool = True):
-    """Authenticate with Anki and save sync key to ~/.rememberit/settings.json."""
-    from .models import OperationResult
-
-    key = _client.login(email, password, persist=persist)
+def login(
+    email: str | None = None, password: str | None = None, *, endpoint: str | None = None
+) -> OperationResult:
+    """Authenticate with Anki sync and persist session."""
+    _client.login(user=email, pw=password, endpoint=endpoint)
     return OperationResult("✓ Logged in successfully", 200)
 
 
 def get_sync_key() -> str | None:
-    """Return cached sync key if available."""
     return _client.get_sync_key()
 
 
 def logout() -> None:
-    """Clear sync key and credentials (keeps settings file)."""
     _client.logout()
     print("✓ Logged out")
 
 
-def reset() -> None:
-    """Delete all RememberIt data from ~/.rememberit folder."""
-    _client.reset()
-    print("✓ Reset complete - all data deleted from ~/.rememberit")
-
-
-def sync():
-    """Trigger a full sync (decks + cards) and return a DeckCollection."""
+def sync() -> DeckCollection:
+    """Sync down from AnkiWeb and return decks + cards."""
     return _client.sync()
 
 
-def decks():
-    """Return cached decks (auto-sync if empty)."""
+def decks() -> DeckCollection:
+    """Return cached decks (syncing down if empty)."""
     return _client.decks()
 
 
-def delete_deck(deck: Deck | str | int):
-    """Delete a deck by object, name/path, or id."""
-    return _client.remove_deck(deck)
-
-
-def rename_deck(deck: Deck | str | int, new_name: str):
-    """Rename a deck by object, name/path, or id."""
-    return _client.rename_deck(deck, new_name)
-
-
-def upsert_deck(
-    data: str | dict,
-    *,
-    deck_name: str | None = None,
-    model_id: int = DEFAULT_MODEL_ID,
-    replace: bool = False,
-):
-    """Create or update a deck with cards from dict or JSON file. Returns Deck object."""
-    return _client.load_deck(data, deck_name=deck_name, model_id=model_id, replace=replace)
-
-
-# Backwards compatibility alias
-def load_deck(
-    path: str | dict,
-    *,
-    deck_name: str | None = None,
-    model_id: int = DEFAULT_MODEL_ID,
-    replace: bool = False,
-):
-    """Deprecated: Use upsert_deck() instead."""
-    return upsert_deck(path, deck_name=deck_name, model_id=model_id, replace=replace)
-
-
-def create_deck(name: str):
-    """Create a deck via /svc/decks/create-deck and return it after sync."""
+def create_deck(name: str) -> Deck:
     return _client.create_deck(name)
 
 
+def delete_deck(deck: Deck | str | int) -> dict[str, Any]:
+    return _client.remove_deck(deck)
 
 
-def sync_meta_raw(sync_key: str, client_version: str | None = None) -> bytes:
-    """Call /sync/meta and return decompressed raw bytes."""
-    if client_version is None:
-        client_version = "anki,25.09.2 (3890e12c),mac:15.5"
-    return _client.sync_meta_raw(sync_key, client_version=client_version)
+def rename_deck(deck: Deck | str | int, new_name: str) -> dict[str, Any]:
+    return _client.rename_deck(deck, new_name)
 
 
-def sync_start_raw(sync_key: str, min_usn: int = 0, lnewer: bool = True, graves=None) -> bytes:
-    """Call /sync/start and return decompressed raw bytes."""
-    return _client.sync_start_raw(sync_key, min_usn=min_usn, lnewer=lnewer, graves=graves)
+def upsert_deck(data: str | Mapping[str, Any], *, deck_name: str | None = None) -> Deck:
+    """
+    Create or update a deck with cards from a dict or JSON file.
+
+    Schema: {"name": str, "cards": [{"front", "back", "note_id"?, "tags"?}]}
+    Cards with matching 'front' text will be updated; new cards will be added.
+    """
+    if isinstance(data, Mapping):
+        payload = dict(data)
+    else:
+        path = Path(data)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+
+    cards = payload.get("cards")
+    if not isinstance(cards, list):
+        raise RememberItError("Deck JSON must include a 'cards' array")
+
+    target_name = deck_name or payload.get("name")
+    if not target_name:
+        raise RememberItError("Deck name is required")
+
+    try:
+        deck_obj = decks()[target_name]
+    except Exception:
+        deck_obj = create_deck(target_name)
+
+    existing_fronts = {c.front: c for c in deck_obj.cards}
+
+    for card in cards:
+        front = card.get("front", "")
+        back = card.get("back", "")
+        tags = card.get("tags", "")
+        note_id = card.get("note_id")
+
+        if note_id:
+            _client.update_card(
+                note_id=note_id, front=front, back=back, tags=tags, deck_id=deck_obj.id
+            )
+        elif front in existing_fronts:
+            existing = existing_fronts[front]
+            if existing.id is not None and (
+                existing.back != back or (tags and tags != getattr(existing, "tags", ""))
+            ):
+                _client.update_card(
+                    note_id=existing.id, front=front, back=back, tags=tags, deck_id=deck_obj.id
+                )
+        else:
+            _client.add_card(deck_id=deck_obj.id, front=front, back=back, tags=tags)
+
+    _client.sync_up()
+    deck_obj.sync()
+    return deck_obj
+
+
+# Backwards compatibility alias
+def load_deck(data: str | Mapping[str, Any], *, deck_name: str | None = None) -> Deck:
+    return upsert_deck(data, deck_name=deck_name)
 
 
 def llmtxt() -> None:
-    """Show AI-friendly example for bulk deck operations."""
-    from IPython.display import Markdown, display
-
-    text = """# RememberIt - LLM Integration Guide
+    """Display quickstart for LLM editing."""
+    text = """# RememberIt - Anki-backed quickstart
 
 ```python
 import rememberit
 
-# Create or update a deck with cards
+# rememberit.login("email@example.com", "password") # if you haven't logged in yet
+decks = rememberit.sync()
+
+# Add or update a deck in bulk
 deck_data = {
-    "name": "Spanish Vocab",
+    "name": "CLI Demo",
     "cards": [
-        {"front": "hello", "back": "hola"},
-        {"front": "goodbye", "back": "adiós"}
+        {"front": "Front 1", "back": "Back 1"},
+        {"front": "Front 2", "back": "Back 2"},
     ]
 }
-deck = rememberit.upsert_deck(deck_data)
-
-# Export deck as JSON string (easy to print/copy)
-json_str = rememberit.decks()["Spanish Vocab"].json()
-print(json_str)  # Pretty-printed JSON
-
-# Or as dict for programmatic editing
-deck_dict = rememberit.decks()["Spanish Vocab"].to_dict()
-deck_dict["cards"].append({"front": "thank you", "back": "gracias"})
-rememberit.upsert_deck(deck_dict)
-```
-"""
-
-    try:
-        # Try to display as Markdown in Jupyter
-        from IPython import get_ipython
-        if get_ipython() is not None:
-            display(Markdown(text))
-            return None  # Don't return string in Jupyter (prevents double display)
-        else:
-            print(text)
-            return None
-    except Exception:
-        # Fallback if not in Jupyter
-        print(text)
-        return None
-
-# Backwards compatibility alias
-def docs() -> None:
-    """Deprecated: Use llmtxt() instead."""
-    llmtxt()
-
-
-def set_debug_log(path: str | None, *, persist: bool = True) -> None:
-    _client.set_debug_log(path, persist=persist)
-
-
-def set_cookie_header(cookie_header: str, *, persist: bool = True) -> None:
-    """Manually set cookies for authenticated calls (e.g. pasted from browser)."""
-    _client.set_cookie_header(cookie_header, persist=persist)
-
-
-def set_cookie_header_ankiweb(cookie_header: str, *, persist: bool = True) -> None:
-    _client.set_cookie_header_ankiweb(cookie_header, persist=persist)
-
-
-def set_cookie_header_ankiuser(cookie_header: str, *, persist: bool = True) -> None:
-    _client.set_cookie_header_ankiuser(cookie_header, persist=persist)
+rememberit.upsert_deck(deck_data)
+```"""
+    print(text)
 
 
 def help() -> None:  # noqa: A001
     """Show available commands."""
-    from IPython.display import Markdown, display
-
-    markdown = """# RememberIt API Reference
-
-## Authentication
+    markdown = """# RememberIt API (Anki-backed)
 
 | Function | Description |
 |----------|-------------|
-| `rememberit.login(email, password)` | Authenticate with AnkiWeb and save sync key |
-| `rememberit.logout()` | Clear sync key and credentials |
-| `rememberit.get_sync_key()` | Get current sync key |
-
-## Deck Operations
-
-| Function | Description |
-|----------|-------------|
-| `rememberit.sync()` | Download all decks and cards from server |
-| `rememberit.decks()` | Get cached decks (call `sync()` to refresh) |
-| `rememberit.create_deck(name)` | Create a new deck |
-| `rememberit.delete_deck(deck)` | Delete a deck by name, ID, or object |
-| `rememberit.rename_deck(deck, new_name)` | Rename a deck |
-
-## Card Operations
-
-| Function | Description |
-|----------|-------------|
-| `rememberit.upsert_deck(data, deck_name=None)` | Create or update deck with cards from dict/JSON |
-
-## Utilities
-
-| Function | Description |
-|----------|-------------|
-| `rememberit.llmtxt()` | Show AI integration examples |
-| `rememberit.reset()` | Delete all RememberIt data from `~/.rememberit` |
-
----
-
-**Quick Start:**
-```python
-# Login once
-rememberit.login("email@example.com", "password")
-
-# Create or update a deck with cards
-deck_data = {
-    "name": "My Deck",
-    "cards": [
-        {"front": "Question", "back": "Answer"},
-    ]
-}
-deck = rememberit.upsert_deck(deck_data)
-
-# View all decks
-rememberit.decks()
-```
+| `rememberit.login(email, password)` | Authenticate and save sync key |
+| `rememberit.sync()` | Sync down and return decks |
+| `rememberit.decks()` | Return cached decks |
+| `rememberit.create_deck(name)` | Create a deck |
+| `rememberit.delete_deck(deck)` | Delete by name/id/object |
+| `rememberit.rename_deck(deck, new_name)` | Rename deck |
+| `rememberit.upsert_deck(data)` | Add/update cards from dict/JSON |
+| `rememberit.llmtxt()` | Show LLM-friendly quickstart guide |
 """
-
-    try:
-        # Try to display as Markdown in Jupyter
-        from IPython import get_ipython
-        if get_ipython() is not None:
-            display(Markdown(markdown))
-            return None  # Don't return string in Jupyter (prevents double display)
-        else:
-            print(markdown)
-            return None
-    except Exception:
-        # Fallback if not in Jupyter
-        print(markdown)
-        return None
+    print(markdown)
 
 
 __all__ = [
     "__version__",
     "login",
     "logout",
-    "reset",
     "get_sync_key",
     "sync",
     "decks",
+    "create_deck",
     "delete_deck",
     "rename_deck",
     "upsert_deck",
     "load_deck",
-    "create_deck",
-    "sync_meta_raw",
-    "sync_start_raw",
+    "add_demo",
+    "list_decks_and_cards",
     "llmtxt",
-    "docs",
-    "set_cookie_header_ankiweb",
-    "set_cookie_header_ankiuser",
-    "set_debug_log",
-    "set_cookie_header",
-    "DEFAULT_USER_AGENT",
-    "DEFAULT_MODEL_ID",
-    "ANKIWEB_BASE_URL",
+    "help",
     "RememberItClient",
     "RememberItError",
-    "Deck",
     "DeckCollection",
+    "Deck",
     "Card",
     "CardCollection",
-    "DeckNode",
     "DeckListResult",
     "CardSummary",
     "OperationResult",
+    "Session",
+    "load_session",
     "Settings",
     "config_path",
     "load_settings",
     "save_settings",
-    "decks_markdown_table",
-    "help",
 ]
-
-
-# Show help message when module is imported in a notebook
-try:
-    __IPYTHON__  # type: ignore
-    # Check if we have a cached sync key
-    cached_key = get_sync_key()
-    if cached_key:
-        print("RememberIt loaded! Logged in successfully.")
-    else:
-        print("RememberIt loaded! Login first:")
-        print('  rememberit.login("email", "password")')
-    print("\nThen try:")
-    print("  rememberit.sync()")
-    print("  rememberit.decks()")
-    print("\nOr see all commands:")
-    print("  rememberit.help()")
-except NameError:
-    # Not in IPython/Jupyter, skip the message
-    pass
