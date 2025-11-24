@@ -8,3 +8,4 @@
 **/.ipynb_checkpoints/*
 
 .coverage
+uv.lock
