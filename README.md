@@ -5,11 +5,16 @@
 [![License](https://img.shields.io/pypi/l/rememberit.svg)](https://github.com/madhavajay/rememberit/blob/main/LICENSE)
 
 Python library for syncing flashcards with Anki.
+Designed to be easily used by LLM Agents.
+
+Don't just [solve.it.com](https://solve.it.com/?utm_source=rememberit) also RememberIt!
+
+Create beautiful styled cards with syntax highlighting, gradient themes, and more.
 
 ## Installation
 
 ```bash
-uv pip install -U rememberit
+pip install rememberit
 ```
 
 ## Quick Start
@@ -17,42 +22,145 @@ uv pip install -U rememberit
 ```python
 import rememberit
 
-# Login with your AnkiWeb credentials
+# Login with your AnkiWeb credentials (first time only)
 rememberit.login("email@example.com", "password")
 
 # Sync and get your decks
 decks = rememberit.sync()
 
-# Add or update cards in bulk
+# Create styled flashcards
 deck_data = {
-    "name": "My Deck",
+    "name": "Python Basics",
     "cards": [
-        {"front": "Question 1", "back": "Answer 1"},
-        {"front": "Question 2", "back": "Answer 2"},
+        # Styled card (default) - random gradient theme
+        {"front": "What is Python?", "back": "A programming language"},
+
+        # Code answer with syntax highlighting
+        {
+            "front": "Write a function to add two numbers",
+            "back": "def add(a, b):\n    return a + b",
+            "back_type": "code",
+        },
+
+        # Styled question + code answer
+        {
+            "front": "How do you create a list comprehension?",
+            "front_type": "card",
+            "front_theme": "blue",
+            "back": "[x**2 for x in range(10)]",
+            "back_type": "code",
+            "back_lang": "python",
+        },
     ]
 }
 rememberit.upsert_deck(deck_data)
 ```
 
-## LLM Text
+## Card Schema
+
 ```python
-decks = rememberit.llmtxt()
+{
+    "front": str | callable,      # Question text (or pass a function!)
+    "back": str | callable,       # Answer text (or pass a function!)
+    "front_type": str,            # "card" (default) | "code" | "plain"
+    "back_type": str,             # "card" (default) | "code" | "plain"
+    "front_lang": str,            # For code type (default: "python")
+    "back_lang": str,
+    "front_theme": str,           # For card type (default: "random")
+    "back_theme": str,
+    "tags": str,                  # Space-separated tags
+}
 ```
 
-Prints text so your LLM can know how to use rememberit.
+## Card Types
 
-## API
+| Type | Description |
+|------|-------------|
+| `card` (default) | Styled card with gradient background |
+| `code` | Syntax-highlighted code block |
+| `plain` | Plain text, no formatting |
+
+## Card Themes
+
+`random` (default), `gradient`, `dark`, `light`, `blue`, `purple`, `green`, `orange`
+
+## Supported Languages
+
+python, javascript, typescript, html, css, sql, bash, shell, json, yaml, rust, go, java, c, cpp, swift, kotlin, ruby, php, r, scala, haskell, lua, perl, markdown
+
+## Core API
 
 | Function | Description |
 |----------|-------------|
-| `rememberit.login(email, password)` | Authenticate and save sync key |
-| `rememberit.sync()` | Sync down and return decks |
-| `rememberit.decks()` | Return cached decks |
-| `rememberit.create_deck(name)` | Create a deck |
-| `rememberit.delete_deck(deck)` | Delete by name/id/object |
-| `rememberit.rename_deck(deck, new_name)` | Rename deck |
-| `rememberit.upsert_deck(data)` | Add/update cards from dict/JSON |
-| `rememberit.llmtxt()` | Show LLM-friendly quickstart guide |
+| `login(email, password)` | Authenticate and save sync key |
+| `logout()` | Clear saved credentials |
+| `sync()` | Sync with AnkiWeb, return decks |
+| `decks()` | Return cached decks |
+| `create_deck(name)` | Create a new deck |
+| `delete_deck(deck)` | Delete by name/id/object |
+| `rename_deck(deck, new_name)` | Rename a deck |
+| `upsert_deck(data)` | Add/update cards from dict/JSON |
+
+## Formatting
+
+| Function | Description |
+|----------|-------------|
+| `format_code(code, lang)` | Format code with syntax highlighting |
+| `format_question(text, theme)` | Format text as styled card |
+| `extract_source(func)` | Extract source from function |
+| `parse_card_field(html)` | Parse HTML back to plain text + metadata |
+
+## Templates
+
+Custom templates are stored in `~/.rememberit/templates/`
+
+| Function | Description |
+|----------|-------------|
+| `show_templates()` | Display all templates with previews |
+| `save_template(name, html)` | Save custom template |
+| `get_template(name)` | Get template by name |
+| `export_builtin(name)` | Export builtin to custom dir |
+
+## Utilities
+
+| Function | Description |
+|----------|-------------|
+| `llmtxt()` | Show quickstart guide |
+| `help()` | Show API reference |
+| `examples.code()` | Preview code formatting |
+| `examples.questions()` | Preview card themes |
+
+## Export Deck as JSON
+
+```python
+# Get deck in upsert-compatible format
+deck = rememberit.decks()["My Deck"]
+deck.to_dict()  # Returns clean format with types parsed out
+deck.json()     # Returns as JSON string
+
+# Get raw HTML (old behavior)
+deck.to_dict(raw=True)
+```
+
+## Pass Functions Directly
+
+```python
+def fibonacci(n):
+    if n <= 1:
+        return n
+    return fibonacci(n-1) + fibonacci(n-2)
+
+deck_data = {
+    "name": "Code Examples",
+    "cards": [
+        {
+            "front": "Fibonacci function",
+            "back": fibonacci,  # Source extracted automatically!
+        }
+    ]
+}
+rememberit.upsert_deck(deck_data)
+```
 
 ## License
 
