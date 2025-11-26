@@ -47,15 +47,27 @@ def is_solveit() -> bool:
 
 
 def list_decks() -> str:
-    """List all available Anki decks with their card counts."""
+    """List all available Anki decks with their card counts.
+
+    **Workflow to update a deck:**
+    1. rememberit_list_decks() - see available decks
+    2. rememberit_deck_as_dict("DeckName") - get deck as editable dict
+    3. Edit the cards as needed
+    4. rememberit.upsert_deck(deck_data) - submit changes
+    """
     import rememberit
 
     collection = rememberit.decks()
     if not collection:
-        return "No decks found. Try `rememberit_sync()` first."
-    lines = ["| Deck | Cards |", "|------|-------|"]
-    for deck in collection:
-        lines.append(f"| {deck.path} | {len(deck.cards)} |")
+        return "No decks found. Try `rememberit_sync_anki()` first."
+    lines = [
+        "| # | Deck | Cards |",
+        "|---|------|-------|",
+    ]
+    for i, deck in enumerate(collection):
+        lines.append(f"| {i} | {deck.path} | {len(deck.cards)} |")
+    lines.append("")
+    lines.append('**Next:** Use `rememberit_deck_as_dict("DeckName")` to get deck contents.')
     return "\n".join(lines)
 
 
@@ -99,6 +111,18 @@ def add_cards(deck_name: str, cards_json: str) -> str:
     Args:
         deck_name: Name of the deck (created if doesn't exist)
         cards_json: JSON array of cards: [{"front": "...", "back": "...", "tags": "..."}]
+
+    **Card format:**
+    ```json
+    [
+        {"front": "Question?", "back": "Answer"},
+        {"front": "Code Q", "back": "def foo(): pass", "back_type": "code"},
+        {"front": "Styled", "front_theme": "blue", "back": "Answer"}
+    ]
+    ```
+
+    **Types:** "code" (syntax highlighted), "plain" (no styling), or omit for styled card
+    **Themes:** random, gradient, dark, light, blue, purple, green, orange
     """
     import json
 
@@ -111,14 +135,17 @@ def add_cards(deck_name: str, cards_json: str) -> str:
     collection = rememberit.decks()
     deck = collection[deck_name]
 
+    added = 0
     for card in cards:
         front = card.get("front", "")
         back = card.get("back", "")
         tags = card.get("tags", "")
         if front and back:
             deck.add_card(front, back, tags)
+            added += 1
 
-    return f"✓ Added {len(cards)} cards to '{deck_name}'"
+    tip = "**Tip:** Use `rememberit.upsert_deck(deck_data)` for bulk add/update."
+    return f"✓ Added {added} cards to '{deck_name}'\n\n{tip}"
 
 
 def update_card(deck_name: str, card_front: str, new_front: str = "", new_back: str = "") -> str:
@@ -176,16 +203,207 @@ def sync_anki() -> str:
     return f"✓ Synced {len(collection)} decks, {total_cards} total cards"
 
 
+def upsert_deck(deck_json: str) -> str:
+    """Create or update a deck with cards from JSON (RECOMMENDED).
+
+    This is the main way to add/update cards. Cards with matching front text
+    are updated; new cards are added.
+
+    Args:
+        deck_json: JSON object with name and cards array
+
+    **Format:**
+    ```json
+    {
+        "name": "Deck Name",
+        "cards": [
+            {"front": "Question?", "back": "Answer"},
+            {"front": "Code Q", "back": "def foo(): pass", "back_type": "code"},
+            {"front": "Styled", "front_theme": "blue", "back": "Answer"}
+        ]
+    }
+    ```
+
+    **Types:** "code" (syntax highlighted), "plain" (no styling), or omit for styled
+    **Themes:** random, gradient, dark, light, blue, purple, green, orange
+    **Languages:** python, javascript, typescript, html, css, sql, bash, json, etc.
+    """
+    import json
+
+    import rememberit
+
+    data = json.loads(deck_json)
+    deck = rememberit.upsert_deck(data)
+    return f"✓ Upserted deck '{deck.name}' with {len(deck.cards)} cards"
+
+
+def deck_as_dict(deck_key: str) -> str:
+    """Get a deck as a dictionary in upsert-compatible format.
+
+    Returns the deck with parsed card content (not raw HTML).
+    Edit the cards and resubmit via rememberit.upsert_deck().
+
+    Args:
+        deck_key: Deck name (string) or index number (as string, e.g. "0" for first deck)
+
+    **Workflow:**
+    1. Get deck: `rememberit_deck_as_dict("MyDeck")`
+    2. Edit the cards array as needed
+    3. Submit: `rememberit.upsert_deck(deck_data)` in Python
+    """
+    import json
+
+    import rememberit
+
+    collection = rememberit.decks()
+    try:
+        if deck_key.isdigit():
+            deck = collection[int(deck_key)]
+        else:
+            deck = collection[deck_key]
+        deck.sync()
+        result = deck.to_dict()
+        output = json.dumps(result, indent=2, ensure_ascii=False)
+        hint = "\n\n**Next:** Edit cards, then: `rememberit.upsert_deck(deck_data)`"
+        return output + hint
+    except (KeyError, IndexError):
+        return f"Deck '{deck_key}' not found. Use rememberit_list_decks()."
+
+
+def show_help() -> str:
+    """Show RememberIt API reference and available commands."""
+    return """RememberIt API Reference:
+
+**Core API:**
+- rememberit.login(email, password) - Authenticate and save sync key
+- rememberit.sync() - Sync with AnkiWeb, return decks
+- rememberit.decks() - Return cached decks
+- rememberit.upsert_deck(data) - Add/update cards from dict (RECOMMENDED)
+- rememberit.create_deck(name) - Create a new deck
+- rememberit.delete_deck(deck) - Delete by name/id/object
+
+**Card Schema:**
+```python
+{
+    "name": "Deck Name",
+    "cards": [
+        {
+            "front": str,        # Question text
+            "back": str,         # Answer text
+            "front_type": str,   # "code" | "plain" | omit for styled
+            "back_type": str,
+            "front_lang": str,   # For code: python, javascript, etc.
+            "back_lang": str,
+            "front_theme": str,  # gradient, dark, light, blue, purple, green, orange
+            "back_theme": str,
+            "tags": str,         # Space-separated tags
+        }
+    ]
+}
+```
+
+**Workflow to edit existing deck:**
+1. `rememberit_list_decks()` - See available decks
+2. `rememberit_deck_as_dict("DeckName")` - Get deck as editable dict
+3. Edit the cards as needed
+4. `rememberit.upsert_deck(deck_data)` - Submit changes
+
+**Workflow to create new deck:**
+```python
+deck_data = {
+    "name": "My New Deck",
+    "cards": [
+        {"front": "Question?", "back": "Answer"},
+        {"front": "Code Q", "back": "def foo(): pass", "back_type": "code"},
+    ]
+}
+rememberit.upsert_deck(deck_data)
+```
+"""
+
+
+def show_llmtxt() -> str:
+    """Show quickstart guide for LLM editing of Anki cards."""
+    return """RememberIt Quickstart for LLMs:
+
+**Create cards:**
+```python
+import rememberit
+deck_data = {
+    "name": "My Deck",
+    "cards": [
+        {"front": "Question?", "back": "Answer"},
+        {"front": "Code question", "back": "def foo(): pass", "back_type": "code"},
+    ]
+}
+rememberit.upsert_deck(deck_data)
+```
+
+**Card types:**
+- (default): Styled card with gradient background
+- "code": Syntax-highlighted code block
+- "plain": Plain text, no formatting
+
+**Languages:** python, javascript, typescript, html, css, sql, bash, json, rust, go, java, c, cpp
+
+**Themes for cards:** random (default), gradient, dark, light, blue, purple, green, orange
+"""
+
+
+def show_examples() -> str:
+    """Show example card formats for different types."""
+    return """RememberIt Card Examples:
+
+**Styled question card (default):**
+{"front": "What is Python?", "back": "A programming language"}
+
+**Code answer:**
+{
+    "front": "Write a function to add two numbers",
+    "back": "def add(a, b):\\n    return a + b",
+    "back_type": "code"
+}
+
+**Code question and answer:**
+{
+    "front": "def mystery(n):\\n    return n * 2",
+    "front_type": "code",
+    "back": "Doubles the input number",
+}
+
+**Themed card:**
+{
+    "front": "Important concept",
+    "front_theme": "purple",
+    "back": "The explanation",
+    "back_theme": "dark"
+}
+
+**Plain text (no styling):**
+{
+    "front": "Simple question",
+    "front_type": "plain",
+    "back": "Simple answer",
+    "back_type": "plain"
+}
+"""
+
+
 # All tools that can be registered with solveit
 TOOLS = [
     list_decks,
     get_deck,
+    deck_as_dict,
+    upsert_deck,
     add_card,
     add_cards,
     update_card,
     create_deck,
     delete_deck,
     sync_anki,
+    show_help,
+    show_llmtxt,
+    show_examples,
 ]
 
 
