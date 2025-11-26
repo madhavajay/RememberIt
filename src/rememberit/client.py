@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import random
@@ -32,6 +34,12 @@ CLIENT_VERSION = "rememberit,0.1"
 def _generate_session_key() -> str:
     chars = string.ascii_letters + string.digits
     return "".join(random.choice(chars) for _ in range(8))
+
+
+def _close_collection_quiet(col: Collection) -> None:
+    """Close collection while suppressing Anki's debug output."""
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        _close_collection_quiet(col)
 
 
 def _download_collection(hkey: str, endpoint: str) -> bytes:
@@ -146,7 +154,7 @@ class RememberItClient:
             return col.sync_login(username=user, password=pw, endpoint=endpoint)
 
         auth = _run_in_thread(_do_login)
-        col.close()
+        _close_collection_quiet(col)
         tmp.unlink(missing_ok=True)
         self.session = save_session(
             Session(
@@ -191,7 +199,7 @@ class RememberItClient:
                 auth=ProtoSyncAuth(hkey=session.hkey, endpoint=session.endpoint),
                 sync_media=False,
             )
-            col.close()
+            _close_collection_quiet(col)
 
         _run_in_thread(_run)
         self._deck_cache.clear()
@@ -211,7 +219,7 @@ class RememberItClient:
                 auth=ProtoSyncAuth(hkey=session.hkey, endpoint=session.endpoint),
                 sync_media=False,
             )
-            col.close()
+            _close_collection_quiet(col)
 
         _run_in_thread(_run)
         self._deck_cache.clear()
@@ -238,7 +246,7 @@ class RememberItClient:
         mm: ModelManager = col.models
         model = mm.by_name("Basic")
         if not model:
-            col.close()
+            _close_collection_quiet(col)
             raise RememberItError("Basic note type not found in collection")
         note = Note(col, model)
         note.fields[0] = front
@@ -246,7 +254,7 @@ class RememberItClient:
         if tags:
             note.tags = tags.split()
         col.add_note(note, deck_id=deck_id)  # type: ignore[arg-type]
-        col.close()
+        _close_collection_quiet(col)
         self._deck_cache.clear()
         self._deck_order = []
         return {"status_code": 200}
@@ -262,14 +270,14 @@ class RememberItClient:
         col = self._ensure_collection()
         note = col.get_note(note_id)  # type: ignore[arg-type]
         if not note:
-            col.close()
+            _close_collection_quiet(col)
             raise RememberItError(f"Note not found: {note_id}")
         note.fields[0] = front
         note.fields[1] = back
         if tags:
             note.tags = tags.split()
         col.update_note(note)
-        col.close()
+        _close_collection_quiet(col)
         self._deck_cache.clear()
         self._deck_order = []
         return {"status_code": 200}
@@ -277,7 +285,7 @@ class RememberItClient:
     def create_deck(self, name: str) -> Deck:
         col = self._ensure_collection()
         deck_id = col.decks.id(name, create=True)
-        col.close()
+        _close_collection_quiet(col)
         deck_row = {
             "id": deck_id,
             "name": name,
@@ -303,7 +311,7 @@ class RememberItClient:
             deck_obj = decks[deck]
         col = self._ensure_collection()
         col.decks.remove([deck_obj.id])
-        col.close()
+        _close_collection_quiet(col)
         self._deck_cache.pop(self._deck_key_from_deck(deck_obj), None)
         self._deck_order = [k for k in self._deck_order if k != self._deck_key_from_deck(deck_obj)]
         return {"status_code": 200}
@@ -316,7 +324,7 @@ class RememberItClient:
             deck_obj = decks[deck]
         col = self._ensure_collection()
         col.decks.rename(deck_obj.id, new_name)
-        col.close()
+        _close_collection_quiet(col)
         # Update cache
         old_key = self._deck_key_from_deck(deck_obj)
         deck_obj.name = new_name
@@ -366,7 +374,7 @@ class RememberItClient:
             for card in deck_obj.cards:
                 card.deck = deck_obj
             decks.append(deck_obj)
-        col.close()
+        _close_collection_quiet(col)
         self._deck_cache = {self._deck_key_from_deck(d): d for d in decks}
         self._deck_order = [self._deck_key_from_deck(d) for d in decks]
 

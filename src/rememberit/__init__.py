@@ -41,7 +41,7 @@ from .templates import (
     show_templates,
     template_info,
 )
-from .tools import TOOLS, is_solveit, register_tools, setup, tools_info, tools_registered
+from .tools import TOOLS, is_solveit, load_tools, tools_info, tools_registered
 
 __version__ = "0.1.2"
 
@@ -459,8 +459,11 @@ __all__ = [
     # Solveit tools
     "is_solveit",
     "tools_registered",
-    "register_tools",
-    "setup",
+    "load_tools",
     "tools_info",
     "TOOLS",
 ]
+
+# Auto-detect solveit and show hint
+if is_solveit():
+    print("Run rememberit.load_tools() to add Anki tools to solveit.")
