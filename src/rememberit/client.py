@@ -39,7 +39,7 @@ def _generate_session_key() -> str:
 def _close_collection_quiet(col: Collection) -> None:
     """Close collection while suppressing Anki's debug output."""
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-        _close_collection_quiet(col)
+        col.close()
 
 
 def _download_collection(hkey: str, endpoint: str) -> bytes:
