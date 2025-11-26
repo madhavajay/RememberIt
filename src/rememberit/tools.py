@@ -236,8 +236,6 @@ def load_tools(silent: bool = False) -> dict[str, object]:
     }
 
 
-
-
 def _styled_html(html: str) -> None:
     """Display styled HTML in notebook, falls back to print."""
     try:
