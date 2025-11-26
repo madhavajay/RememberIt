@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, SupportsIndex, overload
 
-from .formatting import decks_markdown_table
+from .formatting import decks_markdown_table, parse_card_field
 
 if TYPE_CHECKING:  # pragma: no cover
     from .client import RememberItClient
@@ -137,11 +137,26 @@ class CardCollection(list[Card]):
         return super().__getitem__(key)
 
     def _repr_html_(self) -> str:
-        header_html = "<tr><th>id</th><th>front</th><th>back</th></tr>"
+        header_html = (
+            "<tr><th style='padding:8px;border:1px solid #444;'>id</th>"
+            "<th style='padding:8px;border:1px solid #444;'>front</th>"
+            "<th style='padding:8px;border:1px solid #444;'>back</th></tr>"
+        )
         rows = []
         for card in self:
-            rows.append(f"<tr><td>{card.id}</td><td>{card.front}</td><td>{card.back}</td></tr>")
-        return f"<table><thead>{header_html}</thead><tbody>{''.join(rows)}</tbody></table>"
+            rows.append(
+                f"<tr><td style='padding:8px;border:1px solid #444;vertical-align:top;'>"
+                f"{card.id}</td>"
+                f"<td style='padding:8px;border:1px solid #444;vertical-align:top;'>"
+                f"{card.front}</td>"
+                f"<td style='padding:8px;border:1px solid #444;vertical-align:top;'>"
+                f"{card.back}</td></tr>"
+            )
+        return (
+            "<table style='border-collapse:collapse;width:100%;'>"
+            f"<thead style='background:#272822;color:#f8f8f2;'>{header_html}</thead>"
+            f"<tbody>{''.join(rows)}</tbody></table>"
+        )
 
 
 @dataclass
@@ -225,28 +240,57 @@ class Deck:
         file_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         return file_path
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self, *, raw: bool = False) -> dict[str, Any]:
         """
         Export deck cards as a dictionary for AI processing.
-        Returns: {"name": str, "cards": [{"front": str, "back": str}, ...]}
-        """
-        return {
-            "name": self.name,
-            "cards": [
-                {
-                    "front": card.front,
-                    "back": card.back,
-                }
-                for card in self.cards
-            ],
-        }
 
-    def json(self, indent: int = 2) -> str:
+        Args:
+            raw: If True, return raw HTML. If False (default), parse to plain text + metadata.
+
+        Returns:
+            Dict in upsert_deck format:
+            {"name": str, "cards": [{front, back, front_type?, front_theme?, ...}, ...]}
+        """
+        cards_list: list[dict[str, Any]] = []
+        for card in self.cards:
+            if raw:
+                cards_list.append({"front": card.front, "back": card.back})
+            else:
+                card_dict: dict[str, Any] = {}
+                # Parse front
+                front_parsed = parse_card_field(card.front)
+                card_dict["front"] = front_parsed["content"]
+                if front_parsed["type"] != "plain":
+                    card_dict["front_type"] = front_parsed["type"]
+                    if "lang" in front_parsed:
+                        card_dict["front_lang"] = front_parsed["lang"]
+                    if "theme" in front_parsed:
+                        card_dict["front_theme"] = front_parsed["theme"]
+
+                # Parse back
+                back_parsed = parse_card_field(card.back)
+                card_dict["back"] = back_parsed["content"]
+                if back_parsed["type"] != "plain":
+                    card_dict["back_type"] = back_parsed["type"]
+                    if "lang" in back_parsed:
+                        card_dict["back_lang"] = back_parsed["lang"]
+                    if "theme" in back_parsed:
+                        card_dict["back_theme"] = back_parsed["theme"]
+
+                cards_list.append(card_dict)
+
+        return {"name": self.name, "cards": cards_list}
+
+    def json(self, indent: int = 2, *, raw: bool = False) -> str:
         """
         Export deck cards as a JSON string.
         Perfect for printing or passing to AI for editing.
+
+        Args:
+            indent: JSON indentation level (default: 2)
+            raw: If True, return raw HTML. If False (default), parse to plain text + metadata.
         """
-        return json.dumps(self.to_dict(), ensure_ascii=False, indent=indent)
+        return json.dumps(self.to_dict(raw=raw), ensure_ascii=False, indent=indent)
 
     def save_apkg(self, path: str, model_id: int = 1763445109221) -> Path:
         """

@@ -1,0 +1,3 @@
+[submodule "dialoghelper"]
+	path = dialoghelper
+	url = git@github.com:AnswerDotAI/dialoghelper.git
