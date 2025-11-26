@@ -197,54 +197,45 @@ def tools_registered() -> bool:
     return _TOOLS_REGISTERED
 
 
-def register_tools(silent: bool = False) -> str | None:
-    """Register rememberit tools with solveit if available.
+def load_tools(silent: bool = False) -> dict[str, object]:
+    """Load rememberit tools into solveit dialog.
+
+    Injects tool functions into the calling namespace so the LLM can use them.
 
     Args:
-        silent: If True, don't add a message to the dialog showing tool list.
-
-    Returns tool list markdown if registered, None otherwise.
-    """
-    global _TOOLS_REGISTERED
-
-    if not is_solveit():
-        return None
-
-    if _TOOLS_REGISTERED:
-        return "Tools already registered"
-
-    from dialoghelper import add_msg, mk_toollist  # type: ignore[attr-defined]
-
-    tools_md = mk_toollist(TOOLS)
-    msg = f"**RememberIt Anki Tools:**\n\n{tools_md}"
-
-    if not silent:
-        add_msg(msg)
-
-    _TOOLS_REGISTERED = True
-    return msg
-
-
-def setup(auto_register: bool = True, silent: bool = False) -> dict[str, object]:
-    """Initialize rememberit for solveit with status info.
-
-    Args:
-        auto_register: If True and in solveit, automatically register tools.
         silent: If True, don't add a message showing tool list.
 
     Returns:
         dict with keys: solveit (bool), registered (bool), tools (list[str])
     """
+    global _TOOLS_REGISTERED
     in_solveit = is_solveit()
 
-    if in_solveit and auto_register and not _TOOLS_REGISTERED:
-        register_tools(silent=silent)
+    if in_solveit and not _TOOLS_REGISTERED:
+        from dialoghelper import add_msg, mk_toollist  # type: ignore[attr-defined]
+
+        # Inject tools into caller's globals so LLM can find them
+        frame = currentframe()
+        if frame and frame.f_back:
+            caller_globals = frame.f_back.f_globals
+            for tool in TOOLS:
+                caller_globals[tool.__name__] = tool
+
+        tools_md = mk_toollist(TOOLS)
+        msg = f"**RememberIt Anki Tools:**\n\n{tools_md}"
+
+        if not silent:
+            add_msg(msg)
+
+        _TOOLS_REGISTERED = True
 
     return {
         "solveit": in_solveit,
         "registered": _TOOLS_REGISTERED,
         "tools": [t.__name__ for t in TOOLS],
     }
+
+
 
 
 def _styled_html(html: str) -> None:
