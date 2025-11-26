@@ -52,7 +52,7 @@ def list_decks() -> str:
 
     collection = rememberit.decks()
     if not collection:
-        return "No decks found. Try `rememberit.sync()` first."
+        return "No decks found. Try `rememberit_sync()` first."
     lines = ["| Deck | Cards |", "|------|-------|"]
     for deck in collection:
         lines.append(f"| {deck.path} | {len(deck.cards)} |")
@@ -73,7 +73,7 @@ def get_deck(deck_name: str) -> str:
         deck.sync()
         return deck.json()
     except KeyError:
-        return f"Deck '{deck_name}' not found. Use list_decks() to see available decks."
+        return f"Deck '{deck_name}' not found. Use rememberit_list_decks() to see available decks."
 
 
 def add_card(deck_name: str, front: str, back: str, tags: str = "") -> str:
@@ -197,13 +197,15 @@ def tools_registered() -> bool:
     return _TOOLS_REGISTERED
 
 
-def load_tools(silent: bool = False) -> dict[str, object]:
+def load_tools(silent: bool = False, force: bool = False) -> dict[str, object]:
     """Load rememberit tools into solveit dialog.
 
-    Injects tool functions into the calling namespace so the LLM can use them.
+    Registers tools with the LLM via add_msg + mk_toollist.
+    Tools are namespaced as rememberit_* (e.g. rememberit_add_card).
 
     Args:
         silent: If True, don't add a message showing tool list.
+        force: If True, re-register even if already registered.
 
     Returns:
         dict with keys: solveit (bool), registered (bool), tools (list[str])
@@ -211,28 +213,34 @@ def load_tools(silent: bool = False) -> dict[str, object]:
     global _TOOLS_REGISTERED
     in_solveit = is_solveit()
 
-    if in_solveit and not _TOOLS_REGISTERED:
+    if in_solveit and (not _TOOLS_REGISTERED or force):
         from dialoghelper import add_msg, mk_toollist  # type: ignore[attr-defined]
 
-        # Inject tools into caller's globals so LLM can find them
+        # Namespace tools with rememberit_ prefix
+        namespaced_tools = []
         frame = currentframe()
-        if frame and frame.f_back:
-            caller_globals = frame.f_back.f_globals
-            for tool in TOOLS:
-                caller_globals[tool.__name__] = tool
+        caller_globals = frame.f_back.f_globals if frame and frame.f_back else {}
 
-        tools_md = mk_toollist(TOOLS)
-        msg = f"**RememberIt Anki Tools:**\n\n{tools_md}"
+        for tool in TOOLS:
+            # Create namespaced name
+            namespaced_name = f"rememberit_{tool.__name__}"
+            # Store original name, set namespaced name for mk_toollist
+            tool.__name__ = namespaced_name
+            namespaced_tools.append(tool)
+            # Inject into caller's globals
+            caller_globals[namespaced_name] = tool
 
+        # This is what makes the LLM aware of the tools
         if not silent:
-            add_msg(msg)
+            tools_md = mk_toollist(namespaced_tools)
+            add_msg(f"**RememberIt Anki Tools:**\n\n{tools_md}")
 
         _TOOLS_REGISTERED = True
 
     return {
         "solveit": in_solveit,
         "registered": _TOOLS_REGISTERED,
-        "tools": [t.__name__ for t in TOOLS],
+        "tools": [f"rememberit_{t.__name__}" for t in TOOLS] if not _TOOLS_REGISTERED else [],
     }
 
 
