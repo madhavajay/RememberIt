@@ -43,7 +43,7 @@ from .templates import (
 )
 from .tools import TOOLS, is_solveit, load_tools, tools_info, tools_registered
 
-__version__ = "0.1.4"
+__version__ = "0.1.5"
 
 _client = RememberItClient()
 
