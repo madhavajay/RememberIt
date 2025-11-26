@@ -88,21 +88,89 @@ def get_deck(deck_name: str) -> str:
         return f"Deck '{deck_name}' not found. Use rememberit_list_decks() to see available decks."
 
 
-def add_card(deck_name: str, front: str, back: str, tags: str = "") -> str:
-    """Add a new flashcard to a deck.
+def add_card(
+    deck_name: str,
+    front: str,
+    back: str,
+    front_type: str = "card",
+    back_type: str = "card",
+    theme: str = "random",
+    tags: str = "",
+) -> str:
+    """Add a flashcard to a deck.
+
+    For code answers, use `rememberit_add_code_card` or set back_type="code".
+    Use `rememberit_list_card_types()` to see all available types and themes.
 
     Args:
         deck_name: Name of the deck (created if doesn't exist)
         front: Front side of the card (question)
         back: Back side of the card (answer)
+        front_type: "card" (styled, default), "code", or "plain"
+        back_type: "card" (styled, default), "code", or "plain"
+        theme: Card theme - "random" (default), "gradient", "dark", "light",
+               "blue", "purple", "green", "orange"
         tags: Optional space-separated tags
     """
     import rememberit
 
-    collection = rememberit.decks()
-    deck = collection[deck_name]  # auto-creates if missing
-    deck.add_card(front, back, tags)
-    return f"✓ Card added to '{deck_name}'"
+    card: dict[str, str | None] = {
+        "front": front,
+        "back": back,
+        "front_type": front_type if front_type != "card" else None,
+        "back_type": back_type if back_type != "card" else None,
+        "front_theme": theme if front_type == "card" else None,
+        "back_theme": theme if back_type == "card" else None,
+        "tags": tags if tags else None,
+    }
+    # Remove None values
+    filtered_card = {k: v for k, v in card.items() if v}
+    card_data = {"name": deck_name, "cards": [filtered_card]}
+    rememberit.upsert_deck(card_data)
+    return f"✓ Card added to '{deck_name}' (theme={theme})"
+
+
+def add_code_card(
+    deck_name: str, front: str, back: str, language: str = "python", tags: str = ""
+) -> str:
+    """Add a code flashcard with syntax highlighting.
+
+    Use this for programming questions where the answer is code.
+    The back will be syntax-highlighted in the specified language.
+
+    Args:
+        deck_name: Name of the deck (created if doesn't exist)
+        front: Front side (question about code)
+        back: Back side (the code - will be syntax highlighted)
+        language: Programming language (python, javascript, typescript, etc.)
+        tags: Optional space-separated tags
+
+    **Example:**
+    ```
+    rememberit_add_code_card(
+        "Python",
+        "Write a function to reverse a string",
+        "def reverse(s):\\n    return s[::-1]",
+        "python"
+    )
+    ```
+    """
+    import rememberit
+
+    card_data = {
+        "name": deck_name,
+        "cards": [
+            {
+                "front": front,
+                "back": back,
+                "back_type": "code",
+                "back_lang": language,
+                "tags": tags,
+            }
+        ],
+    }
+    rememberit.upsert_deck(card_data)
+    return f"✓ Code card ({language}) added to '{deck_name}'"
 
 
 def add_cards(deck_name: str, cards_json: str) -> str:
@@ -270,6 +338,43 @@ def deck_as_dict(deck_key: str) -> str:
         return f"Deck '{deck_key}' not found. Use rememberit_list_decks()."
 
 
+def list_card_types() -> str:
+    """List all available card types, themes, and code languages.
+
+    Use this to see formatting options for rememberit_add_card and rememberit_upsert_deck.
+    """
+    return """**Card Types:**
+| Type | Description |
+|------|-------------|
+| card | Styled card with gradient background (DEFAULT) |
+| code | Syntax-highlighted code block |
+| plain | Plain text, no styling |
+
+**Themes (for type="card"):**
+| Theme | Description |
+|-------|-------------|
+| random | Random gradient (DEFAULT) |
+| gradient | Purple-pink gradient |
+| dark | Dark blue gradient |
+| light | Light gray gradient |
+| blue | Blue-cyan gradient |
+| purple | Purple-magenta gradient |
+| green | Green gradient |
+| orange | Orange-yellow gradient |
+
+**Languages (for type="code"):**
+python, javascript, typescript, html, css, sql, bash, shell, json, yaml,
+rust, go, java, c, cpp, swift, kotlin, ruby, php, r, scala, haskell
+
+**Usage:**
+```
+rememberit_add_card("Deck", "Question", "Answer", theme="blue")
+rememberit_add_card("Deck", "Q", "code here", back_type="code")
+rememberit_add_code_card("Deck", "Q", "def foo(): pass", "python")
+```
+"""
+
+
 def show_help() -> str:
     """Show RememberIt API reference and available commands."""
     return """RememberIt API Reference:
@@ -392,10 +497,12 @@ def show_examples() -> str:
 # All tools that can be registered with solveit
 TOOLS = [
     list_decks,
+    list_card_types,
     get_deck,
     deck_as_dict,
     upsert_deck,
     add_card,
+    add_code_card,
     add_cards,
     update_card,
     create_deck,

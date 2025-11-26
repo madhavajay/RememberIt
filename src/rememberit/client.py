@@ -148,13 +148,17 @@ class RememberItClient:
 
         STORE_DIR.mkdir(parents=True, exist_ok=True)
         tmp = STORE_DIR / "_login.anki2"
-        col = Collection(str(tmp))
 
-        def _do_login() -> Any:
-            return col.sync_login(username=user, password=pw, endpoint=endpoint)
+        # Suppress Anki's debug output during collection operations
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            col = Collection(str(tmp))
 
-        auth = _run_in_thread(_do_login)
-        _close_collection_quiet(col)
+            def _do_login() -> Any:
+                return col.sync_login(username=user, password=pw, endpoint=endpoint)
+
+            auth = _run_in_thread(_do_login)
+            col.close()
+
         tmp.unlink(missing_ok=True)
         self.session = save_session(
             Session(
@@ -185,7 +189,9 @@ class RememberItClient:
         if not exists:
             data = _download_collection(self.session.hkey, self.session.endpoint)
             COLLECTION_PATH.write_bytes(data)
-        return Collection(str(COLLECTION_PATH))
+        # Suppress Anki's debug output
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            return Collection(str(COLLECTION_PATH))
 
     def sync_down(self) -> None:
         """Pull latest collection from AnkiWeb."""
@@ -195,11 +201,16 @@ class RememberItClient:
 
         def _run() -> None:
             col = self._ensure_collection()
-            col.sync_collection(
-                auth=ProtoSyncAuth(hkey=session.hkey, endpoint=session.endpoint),
-                sync_media=False,
-            )
-            _close_collection_quiet(col)
+            # Suppress Anki's debug output
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                col.sync_collection(
+                    auth=ProtoSyncAuth(hkey=session.hkey, endpoint=session.endpoint),
+                    sync_media=False,
+                )
+                col.close()
 
         _run_in_thread(_run)
         self._deck_cache.clear()
@@ -214,12 +225,17 @@ class RememberItClient:
         session = self.session
 
         def _run() -> None:
-            col = Collection(str(COLLECTION_PATH))
-            col.sync_collection(
-                auth=ProtoSyncAuth(hkey=session.hkey, endpoint=session.endpoint),
-                sync_media=False,
-            )
-            _close_collection_quiet(col)
+            # Suppress Anki's debug output
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                col = Collection(str(COLLECTION_PATH))
+                col.sync_collection(
+                    auth=ProtoSyncAuth(hkey=session.hkey, endpoint=session.endpoint),
+                    sync_media=False,
+                )
+                col.close()
 
         _run_in_thread(_run)
         self._deck_cache.clear()
