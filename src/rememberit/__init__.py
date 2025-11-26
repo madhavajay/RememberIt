@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from . import examples
 from .client import (
     RememberItClient,
     RememberItError,
@@ -14,6 +15,13 @@ from .client import (
     load_session,
 )
 from .config import Settings, config_path, load_settings, save_settings
+from .formatting import (
+    SUPPORTED_LANGUAGES,
+    extract_source,
+    format_code,
+    format_question,
+    parse_card_field,
+)
 from .models import (
     Card,
     CardCollection,
@@ -23,6 +31,17 @@ from .models import (
     DeckListResult,
     OperationResult,
 )
+from .templates import (
+    delete_template,
+    export_builtin,
+    get_template,
+    list_templates,
+    render_template,
+    save_template,
+    show_templates,
+    template_info,
+)
+from .tools import TOOLS, is_solveit, register_tools, setup, tools_info, tools_registered
 
 __version__ = "0.1.1"
 
@@ -68,11 +87,48 @@ def rename_deck(deck: Deck | str | int, new_name: str) -> dict[str, Any]:
     return _client.rename_deck(deck, new_name)
 
 
+def _process_card_field(
+    value: str, field_type: str | None, lang: str, theme: str = "gradient"
+) -> str:
+    """Process a card field, applying formatting based on type."""
+    if field_type == "code":
+        return format_code(value, language=lang)
+    if field_type == "plain":
+        return value
+    # Default to "card" styling
+    return format_question(value, theme=theme)
+
+
 def upsert_deck(data: str | Mapping[str, Any], *, deck_name: str | None = None) -> Deck:
     """
     Create or update a deck with cards from a dict or JSON file.
 
-    Schema: {"name": str, "cards": [{"front", "back", "note_id"?, "tags"?}]}
+    Schema:
+        {
+            "name": str,
+            "cards": [
+                {
+                    "front": str | callable,  # Can be a function object!
+                    "back": str | callable,
+                    "note_id"?: int,
+                    "tags"?: str,
+                    "front_type"?: "code" | "plain",  # Default: styled card
+                    "front_lang"?: str (default: "python"),
+                    "front_theme"?: str (default: "random"),
+                    "back_type"?: "code" | "plain",   # Default: styled card
+                    "back_lang"?: str (default: "python"),
+                    "back_theme"?: str (default: "random"),
+                }
+            ]
+        }
+
+    Field types:
+        - "code": Syntax-highlighted code block (use with front_lang/back_lang)
+        - "plain": Plain text, no styling
+        - Default (no type): Styled card with gradient background
+
+    Themes: random (default), gradient, dark, light, blue, purple, green, orange
+
     Cards with matching 'front' text will be updated; new cards will be added.
     """
     if isinstance(data, Mapping):
@@ -97,25 +153,59 @@ def upsert_deck(data: str | Mapping[str, Any], *, deck_name: str | None = None) 
     existing_fronts = {c.front: c for c in deck_obj.cards}
 
     for card in cards:
-        front = card.get("front", "")
-        back = card.get("back", "")
+        raw_front = card.get("front", "")
+        raw_back = card.get("back", "")
         tags = card.get("tags", "")
         note_id = card.get("note_id")
 
+        front_type = card.get("front_type")
+        front_lang = card.get("front_lang", "python")
+        front_theme = card.get("front_theme", "random")
+        back_type = card.get("back_type")
+        back_lang = card.get("back_lang", "python")
+        back_theme = card.get("back_theme", "random")
+
+        # Handle callable objects (functions) - extract source
+        if callable(raw_front) and not isinstance(raw_front, str):
+            raw_front = extract_source(raw_front)
+            if not front_type:
+                front_type = "code"
+        if callable(raw_back) and not isinstance(raw_back, str):
+            raw_back = extract_source(raw_back)
+            if not back_type:
+                back_type = "code"
+
+        front = _process_card_field(raw_front, front_type, front_lang, front_theme)
+        back = _process_card_field(raw_back, back_type, back_lang, back_theme)
+
         if note_id:
+            # Explicit note_id - always update
             _client.update_card(
                 note_id=note_id, front=front, back=back, tags=tags, deck_id=deck_obj.id
             )
-        elif front in existing_fronts:
-            existing = existing_fronts[front]
-            if existing.id is not None and (
-                existing.back != back or (tags and tags != getattr(existing, "tags", ""))
-            ):
-                _client.update_card(
-                    note_id=existing.id, front=front, back=back, tags=tags, deck_id=deck_obj.id
-                )
         else:
-            _client.add_card(deck_id=deck_obj.id, front=front, back=back, tags=tags)
+            # Try to find existing card by raw_front OR processed front
+            # (handles both plain text and already-formatted cards)
+            existing = existing_fronts.get(raw_front) or existing_fronts.get(front)
+
+            if existing and existing.id is not None:
+                # Update if front, back, or tags changed
+                needs_update = (
+                    existing.front != front
+                    or existing.back != back
+                    or (tags and tags != getattr(existing, "tags", ""))
+                )
+                if needs_update:
+                    _client.update_card(
+                        note_id=existing.id,
+                        front=front,
+                        back=back,
+                        tags=tags,
+                        deck_id=deck_obj.id,
+                    )
+            else:
+                # New card
+                _client.add_card(deck_id=deck_obj.id, front=front, back=back, tags=tags)
 
     _client.sync_up()
     deck_obj.sync()
@@ -127,45 +217,194 @@ def load_deck(data: str | Mapping[str, Any], *, deck_name: str | None = None) ->
     return upsert_deck(data, deck_name=deck_name)
 
 
+def _styled_output(html: str) -> None:
+    """Display styled HTML in notebook, falls back to print."""
+    try:
+        from IPython.display import HTML, display
+
+        display(HTML(html))  # type: ignore[no-untyped-call]
+    except ImportError:
+        import re
+
+        print(re.sub(r"<[^>]+>", "", html))
+
+
 def llmtxt() -> None:
     """Display quickstart for LLM editing."""
-    text = """# RememberIt - Anki-backed quickstart
+    example_code = """import rememberit
 
-```python
-import rememberit
-
-# rememberit.login("email@example.com", "password") # if you haven't logged in yet
+# rememberit.login("email@example.com", "password")  # first time only
 decks = rememberit.sync()
 
-# Add or update a deck in bulk
 deck_data = {
-    "name": "CLI Demo",
+    "name": "Python Basics",
     "cards": [
-        {"front": "Front 1", "back": "Back 1"},
-        {"front": "Front 2", "back": "Back 2"},
+        # Styled card (default) - random gradient theme
+        {"front": "What is Python?", "back": "A programming language"},
+
+        # Code answer with syntax highlighting
+        {
+            "front": "Write a function to add two numbers",
+            "back": "def add(a, b):\\n    return a + b",
+            "back_type": "code",
+        },
     ]
 }
-rememberit.upsert_deck(deck_data)
-```"""
-    print(text)
+rememberit.upsert_deck(deck_data)"""
+
+    schema_code = """{
+    "front": str | callable,      # Question (or pass a function!)
+    "back": str | callable,       # Answer (or pass a function!)
+    "front_type": str,            # Default: styled card | "code" | "plain"
+    "back_type": str,             # Default: styled card | "code" | "plain"
+    "front_lang": str,            # For code type (default: "python")
+    "back_lang": str,
+    "front_theme": str,           # For card type (default: "random")
+    "back_theme": str,
+    "tags": str,                  # Space-separated tags
+}"""
+
+    cs = (
+        "background:#272822;color:#f8f8f2;padding:3px 8px;"
+        "border-radius:4px;font-family:'Fira Code',monospace;font-size:0.9em"
+    )
+    td = "padding:8px 12px;border:1px solid #444"
+    th = "padding:8px 12px;border:1px solid #444;color:#f8f8f2;text-align:left"
+
+    html = f"""
+<div style="background:#1F1F1F;border:1px solid #3A3A3A;border-radius:12px;
+padding:20px 24px;margin:8px 0;font-family:system-ui,-apple-system,sans-serif;
+box-shadow:0 4px 12px rgba(0,0,0,0.15);">
+
+<div style="color:#F5F5F5;font-weight:700;font-size:1.3em;margin-bottom:16px;">
+🃏 RememberIt - Anki Flashcard API</div>
+
+<div style="color:#90EE90;font-weight:600;margin:16px 0 8px 0;">Quick Start</div>
+{format_code(example_code, "python")}
+
+<div style="color:#87CEEB;font-weight:600;margin:20px 0 8px 0;">Card Schema</div>
+{format_code(schema_code, "python")}
+
+<div style="color:#DDA0DD;font-weight:600;margin:20px 0 12px 0;">Types</div>
+<table style="border-collapse:collapse;width:100%;margin-bottom:16px;">
+<thead><tr style="background:#272822;">
+<th style="{th}">Type</th><th style="{th}">Description</th>
+</tr></thead>
+<tbody style="color:#d4d4d4;">
+<tr><td style="{td}">(default)</td>
+<td style="{td}">Styled card with random gradient</td></tr>
+<tr><td style="{td}"><code style="{cs}">code</code></td>
+<td style="{td}">Syntax-highlighted code block</td></tr>
+<tr><td style="{td}"><code style="{cs}">plain</code></td>
+<td style="{td}">Plain text, no formatting</td></tr>
+</tbody></table>
+
+<div style="color:#FFD700;font-weight:600;margin:16px 0 8px 0;">Code Languages</div>
+<div style="color:#d4d4d4;font-size:0.9em;line-height:1.6;">
+python, javascript, typescript, html, css, sql, bash, shell, json, yaml,
+rust, go, java, c, cpp, swift, kotlin, ruby, php, r, scala, haskell, lua, perl, markdown
+</div>
+
+<div style="color:#FFA07A;font-weight:600;margin:16px 0 8px 0;">Card Themes</div>
+<div style="color:#d4d4d4;font-size:0.9em;">
+<code style="{cs}">random</code> (default),
+<code style="{cs}">gradient</code>,
+<code style="{cs}">dark</code>,
+<code style="{cs}">light</code>,
+<code style="{cs}">blue</code>,
+<code style="{cs}">purple</code>,
+<code style="{cs}">green</code>,
+<code style="{cs}">orange</code>
+</div>
+
+<div style="color:#98FB98;font-weight:600;margin:20px 0 8px 0;">💡 Tips</div>
+<ul style="color:#d4d4d4;margin:0;padding-left:20px;font-size:0.9em;line-height:1.8;">
+<li>Pass a function object as front/back → source auto-extracted, type auto-set to "code"</li>
+<li>Run <code style="{cs}">rememberit.examples.code()</code> to preview all language formatting</li>
+<li>Run <code style="{cs}">rememberit.examples.questions()</code> to preview all card themes</li>
+</ul>
+
+</div>"""
+    _styled_output(html)
 
 
 def help() -> None:  # noqa: A001
     """Show available commands."""
-    markdown = """# RememberIt API (Anki-backed)
+    cs = (
+        "background:#272822;color:#f8f8f2;padding:3px 8px;"
+        "border-radius:4px;font-family:'Fira Code',monospace;font-size:0.85em"
+    )
+    td = "padding:10px 14px;border:1px solid #444"
+    th = "padding:10px 14px;border:1px solid #444;color:#f8f8f2;text-align:left;font-weight:600"
 
-| Function | Description |
-|----------|-------------|
-| `rememberit.login(email, password)` | Authenticate and save sync key |
-| `rememberit.sync()` | Sync down and return decks |
-| `rememberit.decks()` | Return cached decks |
-| `rememberit.create_deck(name)` | Create a deck |
-| `rememberit.delete_deck(deck)` | Delete by name/id/object |
-| `rememberit.rename_deck(deck, new_name)` | Rename deck |
-| `rememberit.upsert_deck(data)` | Add/update cards from dict/JSON |
-| `rememberit.llmtxt()` | Show LLM-friendly quickstart guide |
-"""
-    print(markdown)
+    api_funcs = [
+        ("login(email, password)", "Authenticate and save sync key"),
+        ("logout()", "Clear saved credentials"),
+        ("sync()", "Sync with AnkiWeb, return decks"),
+        ("decks()", "Return cached decks"),
+        ("create_deck(name)", "Create a new deck"),
+        ("delete_deck(deck)", "Delete by name/id/object"),
+        ("rename_deck(deck, new_name)", "Rename a deck"),
+        ("upsert_deck(data)", "Add/update cards from dict/JSON"),
+    ]
+
+    format_funcs = [
+        ("format_code(code, lang)", "Format code with syntax highlighting"),
+        ("format_question(text, theme)", "Format text as styled card"),
+        ("extract_source(func)", "Extract source from function"),
+    ]
+
+    template_funcs = [
+        ("show_templates()", "Display all templates with previews"),
+        ("save_template(name, html)", "Save custom template"),
+        ("get_template(name)", "Get template by name"),
+        ("export_builtin(name)", "Export builtin to custom dir"),
+    ]
+
+    util_funcs = [
+        ("llmtxt()", "Show quickstart guide"),
+        ("help()", "Show API reference"),
+        ("examples.code()", "Preview code formatting"),
+        ("examples.questions()", "Preview card themes"),
+    ]
+
+    def make_table(funcs: list[tuple[str, str]]) -> str:
+        rows = "\n".join(
+            f'<tr><td style="{td}"><code style="{cs}">{f}</code></td><td style="{td}">{d}</td></tr>'
+            for f, d in funcs
+        )
+        return f"""<table style="border-collapse:collapse;width:100%;margin-bottom:16px;">
+<thead><tr style="background:#272822;">
+<th style="{th}">Function</th><th style="{th}">Description</th>
+</tr></thead>
+<tbody style="color:#d4d4d4;">{rows}</tbody></table>"""
+
+    html = f"""
+<div style="background:#1F1F1F;border:1px solid #3A3A3A;border-radius:12px;
+padding:20px 24px;margin:8px 0;font-family:system-ui,-apple-system,sans-serif;
+box-shadow:0 4px 12px rgba(0,0,0,0.15);">
+
+<div style="color:#F5F5F5;font-weight:700;font-size:1.3em;margin-bottom:20px;">
+RememberIt API Reference</div>
+
+<div style="color:#90EE90;font-weight:600;margin:16px 0 10px 0;">Core API</div>
+{make_table(api_funcs)}
+
+<div style="color:#87CEEB;font-weight:600;margin:16px 0 10px 0;">Formatting</div>
+{make_table(format_funcs)}
+
+<div style="color:#FFD700;font-weight:600;margin:16px 0 10px 0;">Templates</div>
+{make_table(template_funcs)}
+
+<div style="color:#DDA0DD;font-weight:600;margin:16px 0 10px 0;">Utilities</div>
+{make_table(util_funcs)}
+
+<div style="color:#888;font-size:0.85em;margin-top:16px;">
+v{__version__} • Custom templates: <code style="{cs}">~/.rememberit/templates/</code>
+</div>
+
+</div>"""
+    _styled_output(html)
 
 
 __all__ = [
@@ -180,10 +419,19 @@ __all__ = [
     "rename_deck",
     "upsert_deck",
     "load_deck",
+    # Formatting
+    "format_code",
+    "format_question",
+    "extract_source",
+    "parse_card_field",
+    "SUPPORTED_LANGUAGES",
+    "examples",
+    # Utilities
     "add_demo",
     "list_decks_and_cards",
     "llmtxt",
     "help",
+    # Classes
     "RememberItClient",
     "RememberItError",
     "DeckCollection",
@@ -199,4 +447,20 @@ __all__ = [
     "config_path",
     "load_settings",
     "save_settings",
+    # Templates
+    "show_templates",
+    "save_template",
+    "get_template",
+    "delete_template",
+    "export_builtin",
+    "list_templates",
+    "render_template",
+    "template_info",
+    # Solveit tools
+    "is_solveit",
+    "tools_registered",
+    "register_tools",
+    "setup",
+    "tools_info",
+    "TOOLS",
 ]
