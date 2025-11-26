@@ -33,10 +33,12 @@ class TestToolDefinitions:
         tool_names = {t.__name__ for t in TOOLS}
         expected = {
             "list_decks",
+            "list_card_types",
             "get_deck",
             "deck_as_dict",
             "upsert_deck",
             "add_card",
+            "add_code_card",
             "add_cards",
             "sync_anki",
             "show_help",
