@@ -54,11 +54,13 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/rememberit"]
-
-[tool.hatch.build]
 include = [
-    "image/pickles.jpg",
     "src/rememberit/image/pickles.jpg",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/rememberit",
 ]
 
 [tool.ruff]
