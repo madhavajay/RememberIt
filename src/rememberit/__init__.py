@@ -19,6 +19,7 @@ from .formatting import (
     SUPPORTED_LANGUAGES,
     extract_source,
     format_code,
+    format_image,
     format_question,
     parse_card_field,
 )
@@ -88,15 +89,25 @@ def rename_deck(deck: Deck | str | int, new_name: str) -> dict[str, Any]:
 
 
 def _process_card_field(
-    value: str, field_type: str | None, lang: str, theme: str = "gradient"
+    value: object, field_type: str | None, lang: str, theme: str = "gradient"
 ) -> str:
     """Process a card field, applying formatting based on type."""
     if field_type == "code":
-        return format_code(value, language=lang)
+        return format_code(value, language=lang)  # type: ignore[arg-type]
+    if field_type == "image":
+        return format_image(value)
     if field_type == "plain":
-        return value
+        # If user asked for plain but handed us an image-like object, still render it as image.
+        is_image = hasattr(value, "_repr_png_") or hasattr(value, "_repr_jpeg_")
+        if not isinstance(value, str) and is_image:
+            return format_image(value)
+        return value if isinstance(value, str) else str(value)
+    # Auto-detect image objects when type is not specified
+    if field_type is None and (hasattr(value, "_repr_png_") or hasattr(value, "_repr_jpeg_")):
+        return format_image(value)
+    text_val = value if isinstance(value, str) else str(value)
     # Default to "card" styling
-    return format_question(value, theme=theme)
+    return format_question(text_val, theme=theme)
 
 
 def upsert_deck(data: str | Mapping[str, Any], *, deck_name: str | None = None) -> Deck:
@@ -124,6 +135,7 @@ def upsert_deck(data: str | Mapping[str, Any], *, deck_name: str | None = None) 
 
     Field types:
         - "code": Syntax-highlighted code block (use with front_lang/back_lang)
+        - "image": Data-URI image (path/base64/_repr_png_/bytes)
         - "plain": Plain text, no styling
         - Default (no type): Styled card with gradient background
 

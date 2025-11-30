@@ -2,14 +2,17 @@
 
 Usage:
     import rememberit
-    rememberit.examples.code()      # Show all code examples
-    rememberit.examples.questions() # Show styled question examples
-    rememberit.examples.all()       # Show everything
+    rememberit.examples.code()       # Show all code examples
+    rememberit.examples.questions()  # Show styled question examples
+    rememberit.examples.images()     # Show an image example (data URI)
+    rememberit.examples.all()        # Show everything
 """
 
 from __future__ import annotations
 
-from .formatting import SUPPORTED_LANGUAGES, format_code, format_question
+from pathlib import Path
+
+from .formatting import SUPPORTED_LANGUAGES, format_code, format_image, format_question
 
 CODE_EXAMPLES: dict[str, str] = {
     "python": '''def fibonacci(n: int) -> int:
@@ -175,6 +178,33 @@ def all() -> None:
     code()
     _styled_html("<hr style='margin: 40px 0;'/>")
     questions()
+    _styled_html("<hr style='margin: 40px 0;'/>")
+    images()
+
+
+def images() -> None:
+    """Display minimal image embed examples (data URI)."""
+    _styled_html("<h2>🖼 Image Embed Examples</h2>")
+    _styled_html(
+        "<p>Pass a file path, bytes, base64, or any object with "
+        "<code>_repr_png_</code>/<code>_repr_jpeg_</code> (e.g., tinyviz graph).</p>"
+    )
+    import base64
+
+    # Example 1: tiny transparent PNG (base64)
+    tiny_png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8Xw8AAnsB9rx1Ns0AAAAASUVORK5CYII="  # noqa: E501
+    png_bytes = base64.b64decode(tiny_png_b64)
+    html = format_image(png_bytes, alt="1x1 transparent PNG", max_bytes=None)
+    _styled_html("<h3>Transparent pixel (base64)</h3>")
+    _styled_html(html)
+
+    # Example 2: bundled photo (image/pickles.jpg)
+    pickles_path = _find_pickles_image()
+    if pickles_path:
+        _styled_html("<h3>Bundled example (pickles.jpg)</h3>")
+        _styled_html(format_image(pickles_path, alt="Pickles the dog"))
+    else:
+        _styled_html("<p><i>Pickles image not found.</i></p>")
 
 
 def deck_example() -> dict[str, object]:
@@ -221,3 +251,15 @@ result = dict(zip(keys, values))
             },
         ],
     }
+
+
+def _find_pickles_image() -> Path | None:
+    """Locate bundled pickles.jpg (installed or editable)."""
+    candidates = [
+        Path(__file__).resolve().parent.parent / "image" / "pickles.jpg",
+        Path(__file__).resolve().parent / "image" / "pickles.jpg",
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
