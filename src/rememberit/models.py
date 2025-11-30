@@ -91,11 +91,16 @@ class Card:
     deck: Deck | None = None
     _client: RememberItClient | None = None
 
-    def update(self, *, front: str | None = None, back: str | None = None, tags: str = "") -> Card:
+    def update(
+        self, *, front: object | None = None, back: object | None = None, tags: str = ""
+    ) -> Card:
         if not self._client or self.id is None:
             raise RuntimeError("Cannot update card without client and id")
-        new_front = front if front is not None else self.front
-        new_back = back if back is not None else self.back
+        # Import here to avoid circular dependency
+        from .formatting import auto_format_field
+
+        new_front = auto_format_field(front) if front is not None else self.front
+        new_back = auto_format_field(back) if back is not None else self.back
         self._client.update_card(note_id=self.id, front=new_front, back=new_back, tags=tags)
         self.front, self.back = new_front, new_back
         return self
@@ -198,10 +203,14 @@ class Deck:
                 return self
         return self
 
-    def add_card(self, front: str, back: str, tags: str = "") -> Deck:
+    def add_card(self, front: object, back: object, tags: str = "") -> Deck:
         if not self._client:
             raise RuntimeError("No client attached to deck")
-        self._client.add_card(deck_id=self.id, front=front, back=back, tags=tags)
+        from .formatting import auto_format_field
+
+        front_str = auto_format_field(front)
+        back_str = auto_format_field(back)
+        self._client.add_card(deck_id=self.id, front=front_str, back=back_str, tags=tags)
         return self.sync()
 
     def delete(self) -> OperationResult:

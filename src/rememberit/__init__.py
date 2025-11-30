@@ -17,6 +17,7 @@ from .client import (
 from .config import Settings, config_path, load_settings, save_settings
 from .formatting import (
     SUPPORTED_LANGUAGES,
+    auto_format_field,
     extract_source,
     format_code,
     format_image,
@@ -452,7 +453,9 @@ __all__ = [
     "load_deck",
     # Formatting
     "format_code",
+    "format_image",
     "format_question",
+    "auto_format_field",
     "extract_source",
     "parse_card_field",
     "SUPPORTED_LANGUAGES",
