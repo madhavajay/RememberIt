@@ -101,13 +101,32 @@ def _process_card_field(
         is_image = hasattr(value, "_repr_png_") or hasattr(value, "_repr_jpeg_")
         if not isinstance(value, str) and is_image:
             return format_image(value)
+        if isinstance(value, (str, Path)):
+            maybe_img = _try_format_image(value)
+            if maybe_img is not None:
+                return maybe_img
         return value if isinstance(value, str) else str(value)
     # Auto-detect image objects when type is not specified
     if field_type is None and (hasattr(value, "_repr_png_") or hasattr(value, "_repr_jpeg_")):
         return format_image(value)
+    if field_type is None and isinstance(value, (str, Path)):
+        maybe_img = _try_format_image(value)
+        if maybe_img is not None:
+            return maybe_img
     text_val = value if isinstance(value, str) else str(value)
     # Default to "card" styling
     return format_question(text_val, theme=theme)
+
+
+def _try_format_image(value: object) -> str | None:
+    """Best-effort image rendering for paths/base64/data URIs; returns None if unsupported."""
+    try:
+        return format_image(value)
+    except ValueError:
+        # Too large or other validation issues - let caller decide whether to surface
+        raise
+    except Exception:
+        return None
 
 
 def upsert_deck(data: str | Mapping[str, Any], *, deck_name: str | None = None) -> Deck:

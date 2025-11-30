@@ -5,6 +5,7 @@ import binascii
 import inspect
 import io
 import mimetypes
+import os
 import pathlib
 import random
 import re
@@ -268,10 +269,16 @@ def _coerce_image_bytes(
 
     # file path
     if isinstance(obj, (str, pathlib.Path)):
-        path = pathlib.Path(obj).expanduser()
-        if path.exists():
-            data = path.read_bytes()
-            mime = mime_hint or (mimetypes.guess_type(path.name)[0] or _guess_mime_from_bytes(data))
+        path_str = str(obj)
+        # Expand tilde and env vars for user-friendly paths (e.g., ~/Downloads/cat.jpg)
+        expanded = pathlib.Path(path_str).expanduser()
+        expanded = pathlib.Path(os.path.expandvars(str(expanded)))
+        # If still relative, resolve against CWD to catch ./image/foo.jpg cases
+        if not expanded.is_absolute():
+            expanded = pathlib.Path.cwd() / expanded
+        if expanded.exists():
+            data = expanded.read_bytes()
+            mime = mime_hint or (mimetypes.guess_type(expanded.name)[0] or _guess_mime_from_bytes(data))
             return data, mime
         # bare base64 string fallback (PNG/JPEG/GIF)
         if isinstance(obj, str):

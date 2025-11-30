@@ -189,16 +189,8 @@ def images() -> None:
         "<p>Pass a file path, bytes, base64, or any object with "
         "<code>_repr_png_</code>/<code>_repr_jpeg_</code> (e.g., tinyviz graph).</p>"
     )
-    import base64
 
-    # Example 1: tiny transparent PNG (base64)
-    tiny_png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8Xw8AAnsB9rx1Ns0AAAAASUVORK5CYII="  # noqa: E501
-    png_bytes = base64.b64decode(tiny_png_b64)
-    html = format_image(png_bytes, alt="1x1 transparent PNG", max_bytes=None)
-    _styled_html("<h3>Transparent pixel (base64)</h3>")
-    _styled_html(html)
-
-    # Example 2: bundled photo (image/pickles.jpg)
+    # Bundled photo (image/pickles.jpg)
     pickles_path = _find_pickles_image()
     if pickles_path:
         _styled_html("<h3>Bundled example (pickles.jpg)</h3>")
@@ -256,8 +248,9 @@ result = dict(zip(keys, values))
 def _find_pickles_image() -> Path | None:
     """Locate bundled pickles.jpg (installed or editable)."""
     candidates = [
+        Path(__file__).resolve().parent / "image" / "pickles.jpg",  # packaged path
         Path(__file__).resolve().parent.parent / "image" / "pickles.jpg",
-        Path(__file__).resolve().parent / "image" / "pickles.jpg",
+        Path(__file__).resolve().parent.parent.parent / "image" / "pickles.jpg",
     ]
     for path in candidates:
         if path.exists():
