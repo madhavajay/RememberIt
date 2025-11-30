@@ -441,6 +441,36 @@ def format_image(
     )
 
 
+def auto_format_field(value: object) -> str:
+    """
+    Auto-detect and format a card field value.
+
+    Automatically converts:
+    - PIL Images -> formatted image HTML
+    - File paths to images -> formatted image HTML
+    - Objects with _repr_png_/_repr_jpeg_ -> formatted image HTML
+    - Everything else -> string representation
+
+    Returns:
+        Formatted HTML string ready for Anki
+    """
+    # Auto-detect image objects (PIL Images, matplotlib figures, etc.)
+    if hasattr(value, "_repr_png_") or hasattr(value, "_repr_jpeg_"):
+        return format_image(value)
+
+    # Try to detect image files by path
+    if isinstance(value, (str, pathlib.Path)):
+        try:
+            # Try to format as image - will succeed if it's a valid image path/data URI/base64
+            return format_image(value)
+        except Exception:
+            # Not an image, return as-is
+            pass
+
+    # Return as string for everything else
+    return value if isinstance(value, str) else str(value)
+
+
 def decks_markdown_table(flat_decks: Iterable[Mapping[str, object]]) -> str:
     """
     Build a simple Markdown table for decks.
