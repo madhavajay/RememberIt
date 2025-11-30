@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import inspect
+import io
+import mimetypes
+import os
+import pathlib
 import random
 import re
 import textwrap
@@ -45,6 +51,11 @@ SUPPORTED_LANGUAGES = [
     "perl",
     "markdown",
 ]
+
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_JPEG_MAGIC = b"\xff\xd8\xff"
+_GIF87_MAGIC = b"GIF87a"
+_GIF89_MAGIC = b"GIF89a"
 
 
 def extract_source(func: Callable[..., Any]) -> str:
@@ -217,6 +228,219 @@ text-shadow: 0 2px 4px rgba(0,0,0,0.1);
 </div></div>"""
 
 
+def _escape_html_attr(value: str) -> str:
+    return (
+        value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    )
+
+
+def _guess_mime_from_bytes(data: bytes, fallback: str = "image/png") -> str:
+    if data.startswith(_PNG_MAGIC):
+        return "image/png"
+    if data.startswith(_JPEG_MAGIC):
+        return "image/jpeg"
+    if data.startswith(_GIF87_MAGIC) or data.startswith(_GIF89_MAGIC):
+        return "image/gif"
+    return fallback
+
+
+def _coerce_image_bytes(
+    obj: object,
+    *,
+    mime_hint: str | None = None,
+) -> tuple[bytes, str]:
+    """
+    Convert common image representations into raw bytes + mime.
+
+    Supports:
+    - Path-like strings
+    - data:image/...;base64,... strings
+    - Bare base64 PNG/JPEG/GIF strings
+    - bytes / bytearray / memoryview
+    - Objects exposing _repr_png_() or _repr_jpeg_()
+    - Pillow Image objects (if pillow is installed)
+    """
+    # data URI
+    if isinstance(obj, str) and obj.strip().startswith("data:image"):
+        header, _, b64data = obj.partition(",")
+        mime = mime_hint or header.split(";")[0].split(":", 1)[-1]
+        raw = base64.b64decode(b64data)
+        return raw, mime or "image/png"
+
+    # file path
+    if isinstance(obj, (str, pathlib.Path)):
+        path_str = str(obj)
+        # Expand tilde and env vars for user-friendly paths (e.g., ~/Downloads/cat.jpg)
+        expanded = pathlib.Path(path_str).expanduser()
+        expanded = pathlib.Path(os.path.expandvars(str(expanded)))
+        # If still relative, resolve against CWD to catch ./image/foo.jpg cases
+        if not expanded.is_absolute():
+            expanded = pathlib.Path.cwd() / expanded
+        if expanded.exists():
+            data = expanded.read_bytes()
+            guessed_mime = mimetypes.guess_type(expanded.name)[0]
+            mime = mime_hint or guessed_mime or _guess_mime_from_bytes(data)
+            return data, mime
+        # bare base64 string fallback (PNG/JPEG/GIF)
+        if isinstance(obj, str):
+            txt = obj.strip()
+            if len(txt) > 32:  # avoid false positives on short strings
+                try:
+                    decoded = base64.b64decode(txt, validate=True)
+                    mime = mime_hint or _guess_mime_from_bytes(decoded)
+                    if mime.startswith("image/"):
+                        return decoded, mime
+                except (binascii.Error, ValueError):
+                    pass
+
+    # raw bytes-ish
+    if isinstance(obj, (bytes, bytearray, memoryview)):
+        data = bytes(obj)
+        mime = mime_hint or _guess_mime_from_bytes(data)
+        return data, mime
+
+    # Tinyviz / Jupyter style reprs
+    if hasattr(obj, "_repr_png_"):
+        png_data = obj._repr_png_()
+        if isinstance(png_data, str):
+            # Try to decode as base64 if it looks like PNG data; otherwise utf-8 bytes
+            try:
+                decoded = base64.b64decode(png_data, validate=True)
+                data = decoded if decoded.startswith(_PNG_MAGIC) else png_data.encode("utf-8")
+            except Exception:
+                # Last resort: latin1 to preserve byte values
+                data = png_data.encode("latin1", "ignore")
+        else:
+            data = png_data
+        mime = mime_hint or "image/png"
+        return data, mime
+    if hasattr(obj, "_repr_jpeg_"):
+        jpeg_data = obj._repr_jpeg_()
+        if isinstance(jpeg_data, str):
+            try:
+                decoded = base64.b64decode(jpeg_data, validate=True)
+                data = decoded if decoded.startswith(_JPEG_MAGIC) else jpeg_data.encode("utf-8")
+            except Exception:
+                data = jpeg_data.encode("latin1", "ignore")
+        else:
+            data = jpeg_data
+        mime = mime_hint or "image/jpeg"
+        return data, mime
+
+    # Pillow Image (optional)
+    try:
+        from PIL import Image as PILImage
+    except Exception:
+        pil_image = None
+    else:
+        pil_image = PILImage
+
+    if pil_image and isinstance(obj, pil_image.Image):
+        buf = io.BytesIO()
+        save_fmt = "PNG"
+        if mime_hint:
+            save_fmt = mime_hint.split("/")[-1].upper()
+        obj.save(buf, format=save_fmt)
+        data = buf.getvalue()
+        mime = mime_hint or _guess_mime_from_bytes(data)
+        return data, mime
+
+    raise TypeError(
+        "Unsupported image source. Provide a path, data URI, base64 image string, bytes, "
+        "an object with _repr_png_/_repr_jpeg_, or a Pillow Image."
+    )
+
+
+def _maybe_shrink_image(data: bytes, mime: str, max_bytes: int | None) -> tuple[bytes, str]:
+    """
+    If the image is larger than max_bytes, try to compress/resize to fit.
+    Returns (data, mime). May change mime to image/jpeg after recompression.
+    """
+    if max_bytes is None or len(data) <= max_bytes:
+        return data, mime
+    try:
+        from PIL import Image
+    except Exception as exc:
+        raise ValueError(
+            f"Image too large: {len(data)} bytes (limit {max_bytes}). "
+            "Install pillow or pass max_bytes=None to bypass."
+        ) from exc
+
+    try:
+        img = Image.open(io.BytesIO(data))
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(
+            f"Image too large ({len(data)} bytes) and could not be opened for compression."
+        ) from exc
+
+    if img.mode not in ("RGB", "L"):
+        converted_img = img.convert("RGB")
+    else:
+        converted_img = img
+
+    quality = 88
+    scale = 1.0
+    last = data
+    for _ in range(7):
+        buf = io.BytesIO()
+        w = max(1, int(converted_img.width * scale))
+        h = max(1, int(converted_img.height * scale))
+        converted_img.resize((w, h)).save(buf, format="JPEG", quality=quality, optimize=True)
+        compressed = buf.getvalue()
+        last = compressed
+        if len(compressed) <= max_bytes:
+            return compressed, "image/jpeg"
+        quality = max(40, int(quality * 0.82))
+        scale *= 0.85
+
+    raise ValueError(
+        f"Image too large even after compression ({len(last)} bytes). "
+        "Pass max_bytes=None to bypass."
+    )
+
+
+def format_image(
+    image: object,
+    *,
+    alt: str = "image",
+    mime: str | None = None,
+    max_bytes: int | None = 2_000_000,
+    style: str = (
+        "max-width:100%; height:auto; border-radius:12px; box-shadow:0 6px 20px rgba(0,0,0,0.2);"
+    ),
+) -> str:
+    """
+    Build a data-URI <img> tag that works inside Anki/RememberIt.
+
+    Automatically handles:
+    - file paths
+    - data:image/...;base64,... strings
+    - bare base64 (PNG/JPEG/GIF)
+    - bytes
+    - objects exposing _repr_png_/_repr_jpeg_ (e.g., tinyviz graph)
+    - Pillow Image (if pillow installed)
+
+    Args:
+        image: Source object (path/bytes/base64/_repr_png_/PIL Image)
+        alt: Alt text for the image
+        mime: Optional mime hint (e.g., "image/png")
+        max_bytes: Raise if raw bytes exceed this size (None to disable)
+        style: Inline styles for <img>
+    """
+    data, actual_mime = _coerce_image_bytes(image, mime_hint=mime)
+    if not isinstance(data, (bytes, bytearray, memoryview)) or len(data) == 0:
+        raise ValueError("Image source did not produce bytes")
+    data, actual_mime = _maybe_shrink_image(bytes(data), actual_mime, max_bytes)
+    b64 = base64.b64encode(data).decode("ascii")
+    alt_esc = _escape_html_attr(alt)
+    style_esc = _escape_html_attr(style)
+    return (
+        f'<div data-ri-type="image" data-ri-mime="{actual_mime}" '
+        f'data-ri-bytes="{len(data)}" data-ri-content="{alt_esc}">'
+        f'<img src="data:{actual_mime};base64,{b64}" alt="{alt_esc}" style="{style_esc}" /></div>'
+    )
+
+
 def decks_markdown_table(flat_decks: Iterable[Mapping[str, object]]) -> str:
     """
     Build a simple Markdown table for decks.
@@ -288,5 +512,13 @@ def parse_card_field(html: str) -> dict[str, str]:
         theme_match = re.search(r'data-ri-theme="([^"]+)"', html)
         if theme_match:
             result["theme"] = theme_match.group(1)
+
+    elif field_type == "image":
+        mime_match = re.search(r'data-ri-mime="([^"]+)"', html)
+        if mime_match:
+            result["mime"] = mime_match.group(1)
+        size_match = re.search(r'data-ri-bytes="([^"]+)"', html)
+        if size_match:
+            result["bytes"] = size_match.group(1)
 
     return result
