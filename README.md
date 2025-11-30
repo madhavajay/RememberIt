@@ -9,7 +9,7 @@ Designed to be easily used by LLM Agents.
 
 Don't just [solve.it.com](https://solve.it.com/?utm_source=rememberit) also RememberIt!
 
-Create beautiful styled cards with syntax highlighting, gradient themes, and more.
+Create beautiful styled cards with syntax highlighting, embedded images, gradient themes, and more.
 
 ## Installation
 
@@ -28,7 +28,7 @@ rememberit.login("email@example.com", "password")
 # Sync and get your decks
 decks = rememberit.sync()
 
-# Create styled flashcards
+# Create styled flashcards with code, images, and more!
 deck_data = {
     "name": "Python Basics",
     "cards": [
@@ -51,6 +51,12 @@ deck_data = {
             "back_type": "code",
             "back_lang": "python",
         },
+
+        # Images (auto-detected from paths or PIL)
+        {
+            "front": "System Architecture",
+            "back": "~/diagrams/architecture.png",
+        },
     ]
 }
 rememberit.upsert_deck(deck_data)
@@ -60,10 +66,10 @@ rememberit.upsert_deck(deck_data)
 
 ```python
 {
-    "front": str | callable,      # Question text (or pass a function!)
-    "back": str | callable,       # Answer text (or pass a function!)
-    "front_type": str,            # "card" (default) | "code" | "plain"
-    "back_type": str,             # "card" (default) | "code" | "plain"
+    "front": str | callable | Path | PIL.Image,  # Text, function, or image!
+    "back": str | callable | Path | PIL.Image,   # Text, function, or image!
+    "front_type": str,            # "card" (default) | "code" | "plain" | "image"
+    "back_type": str,             # "card" (default) | "code" | "plain" | "image"
     "front_lang": str,            # For code type (default: "python")
     "back_lang": str,
     "front_theme": str,           # For card type (default: "random")
@@ -78,6 +84,7 @@ rememberit.upsert_deck(deck_data)
 |------|-------------|
 | `card` (default) | Styled card with gradient background |
 | `code` | Syntax-highlighted code block |
+| `image` | Embedded image (auto-detected) |
 | `plain` | Plain text, no formatting |
 
 ## Card Themes
@@ -107,6 +114,8 @@ python, javascript, typescript, html, css, sql, bash, shell, json, yaml, rust, g
 |----------|-------------|
 | `format_code(code, lang)` | Format code with syntax highlighting |
 | `format_question(text, theme)` | Format text as styled card |
+| `format_image(image, alt)` | Format image as embedded data URI |
+| `auto_format_field(value)` | Auto-detect and format any field type |
 | `extract_source(func)` | Extract source from function |
 | `parse_card_field(html)` | Parse HTML back to plain text + metadata |
 
@@ -161,6 +170,76 @@ deck_data = {
 }
 rememberit.upsert_deck(deck_data)
 ```
+
+## Working with Images
+
+Images are **automatically detected and converted** to embedded data URIs. No manual formatting needed!
+
+### Supported Image Inputs
+
+```python
+from pathlib import Path
+from PIL import Image
+
+# 1. File paths (relative, absolute, or with ~)
+card.update(back="~/Downloads/diagram.png")
+card.update(back="/absolute/path/to/image.jpg")
+card.update(back="relative/path/image.png")
+
+# 2. Path objects
+image_path = Path("~/Downloads/screenshot.png").expanduser()
+card.update(back=image_path)
+
+# 3. PIL Images
+pil_image = Image.open("chart.png")
+card.update(back=pil_image)
+
+# 4. Objects with _repr_png_() or _repr_jpeg_() (matplotlib, etc.)
+import matplotlib.pyplot as plt
+fig, ax = plt.subplots()
+ax.plot([1, 2, 3], [1, 4, 9])
+card.update(back=fig)  # Auto-converted!
+
+# 5. In upsert_deck
+deck_data = {
+    "name": "Visual Learning",
+    "cards": [
+        {
+            "front": "System Architecture",
+            "back": "~/diagrams/architecture.png",  # Auto-detected!
+        },
+        {
+            "front": "Performance Graph",
+            "back": pil_image,  # PIL Image works too!
+            "back_type": "image",  # Optional: explicit type
+        }
+    ]
+}
+rememberit.upsert_deck(deck_data)
+```
+
+### Manual Image Formatting
+
+If you need more control:
+
+```python
+from rememberit import format_image
+
+# With custom alt text and size limit
+html = format_image(
+    "~/Downloads/photo.jpg",
+    alt="Detailed diagram",
+    max_bytes=1_000_000  # 1MB limit
+)
+card.update(back=html)
+```
+
+### What Works Everywhere
+
+All these methods support images with auto-detection:
+- `card.update(front=image, back=image)`
+- `deck.add_card(front=image, back=image)`
+- `upsert_deck({"cards": [{"front": image, "back": image}]})`
 
 ## License
 
