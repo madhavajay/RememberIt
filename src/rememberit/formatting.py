@@ -278,7 +278,8 @@ def _coerce_image_bytes(
             expanded = pathlib.Path.cwd() / expanded
         if expanded.exists():
             data = expanded.read_bytes()
-            mime = mime_hint or (mimetypes.guess_type(expanded.name)[0] or _guess_mime_from_bytes(data))
+            guessed_mime = mimetypes.guess_type(expanded.name)[0]
+            mime = mime_hint or guessed_mime or _guess_mime_from_bytes(data)
             return data, mime
         # bare base64 string fallback (PNG/JPEG/GIF)
         if isinstance(obj, str):
