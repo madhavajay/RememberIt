@@ -441,7 +441,30 @@ def format_image(
     )
 
 
-def auto_format_field(value: object) -> str:
+def _is_image_like(value: object) -> bool:
+    """
+    Check if a value appears to be an image or image path.
+
+    Returns:
+        True if the value is likely an image that can be formatted
+    """
+    # Objects with image repr methods
+    if hasattr(value, "_repr_png_") or hasattr(value, "_repr_jpeg_"):
+        return True
+
+    # Try to detect image files by path
+    if isinstance(value, (str, pathlib.Path)):
+        try:
+            # Try to format as image - will succeed if it's a valid image path/data URI/base64
+            format_image(value)
+            return True
+        except Exception:
+            return False
+
+    return False
+
+
+def auto_format_field(value: object, default_style: str = "plain", theme: str = "random") -> str:
     """
     Auto-detect and format a card field value.
 
@@ -449,26 +472,27 @@ def auto_format_field(value: object) -> str:
     - PIL Images -> formatted image HTML
     - File paths to images -> formatted image HTML
     - Objects with _repr_png_/_repr_jpeg_ -> formatted image HTML
-    - Everything else -> string representation
+    - Plain text -> styled card (if default_style="card") or plain string
+
+    Args:
+        value: The field value (string, Path, PIL Image, etc.)
+        default_style: How to format plain text - "plain" or "card" (default: "plain")
+        theme: Theme to use if default_style is "card" (default: "random")
 
     Returns:
         Formatted HTML string ready for Anki
     """
-    # Auto-detect image objects (PIL Images, matplotlib figures, etc.)
-    if hasattr(value, "_repr_png_") or hasattr(value, "_repr_jpeg_"):
+    # Check if it's an image first
+    if _is_image_like(value):
         return format_image(value)
 
-    # Try to detect image files by path
-    if isinstance(value, (str, pathlib.Path)):
-        try:
-            # Try to format as image - will succeed if it's a valid image path/data URI/base64
-            return format_image(value)
-        except Exception:
-            # Not an image, return as-is
-            pass
+    # For plain text
+    text = value if isinstance(value, str) else str(value)
 
-    # Return as string for everything else
-    return value if isinstance(value, str) else str(value)
+    if default_style == "card":
+        return format_question(text, theme)
+    else:
+        return text
 
 
 def decks_markdown_table(flat_decks: Iterable[Mapping[str, object]]) -> str:

@@ -92,15 +92,62 @@ class Card:
     _client: RememberItClient | None = None
 
     def update(
-        self, *, front: object | None = None, back: object | None = None, tags: str = ""
+        self,
+        *,
+        front: object | None = None,
+        back: object | None = None,
+        tags: str = "",
+        front_type: str | None = None,
+        back_type: str | None = None,
+        front_lang: str | None = None,
+        back_lang: str | None = None,
+        front_theme: str | None = None,
+        back_theme: str | None = None,
     ) -> Card:
         if not self._client or self.id is None:
             raise RuntimeError("Cannot update card without client and id")
-        # Import here to avoid circular dependency
-        from .formatting import auto_format_field
+        from .formatting import auto_format_field, extract_source, format_code, format_question
 
-        new_front = auto_format_field(front) if front is not None else self.front
-        new_back = auto_format_field(back) if back is not None else self.back
+        # Format front field if provided
+        if front is not None:
+            if front_type == "code":
+                new_front = format_code(str(front), front_lang or "python")
+            elif front_type == "card":
+                new_front = format_question(str(front), front_theme or "random")
+            elif front_type == "plain":
+                new_front = str(front)
+            else:
+                # Auto-detect: check if it's a function
+                if callable(front):
+                    new_front = format_code(extract_source(front), "python")
+                else:
+                    # Default to styled card with gradient theme
+                    new_front = auto_format_field(
+                        front, default_style="card", theme=front_theme or "random"
+                    )
+        else:
+            new_front = self.front
+
+        # Format back field if provided
+        if back is not None:
+            if back_type == "code":
+                new_back = format_code(str(back), back_lang or "python")
+            elif back_type == "card":
+                new_back = format_question(str(back), back_theme or "random")
+            elif back_type == "plain":
+                new_back = str(back)
+            else:
+                # Auto-detect: check if it's a function
+                if callable(back):
+                    new_back = format_code(extract_source(back), "python")
+                else:
+                    # Default to styled card with gradient theme
+                    new_back = auto_format_field(
+                        back, default_style="card", theme=back_theme or "random"
+                    )
+        else:
+            new_back = self.back
+
         self._client.update_card(note_id=self.id, front=new_front, back=new_back, tags=tags)
         self.front, self.back = new_front, new_back
         return self
@@ -203,15 +250,72 @@ class Deck:
                 return self
         return self
 
-    def add_card(self, front: object, back: object, tags: str = "") -> Deck:
+    def add_card(
+        self,
+        front: object,
+        back: object,
+        tags: str = "",
+        front_type: str | None = None,
+        back_type: str | None = None,
+        front_lang: str | None = None,
+        back_lang: str | None = None,
+        front_theme: str | None = None,
+        back_theme: str | None = None,
+    ) -> Card:
         if not self._client:
             raise RuntimeError("No client attached to deck")
-        from .formatting import auto_format_field
+        from .formatting import auto_format_field, extract_source, format_code, format_question
 
-        front_str = auto_format_field(front)
-        back_str = auto_format_field(back)
+        # Format front field
+        if front_type == "code":
+            front_str = format_code(str(front), front_lang or "python")
+        elif front_type == "card":
+            front_str = format_question(str(front), front_theme or "random")
+        elif front_type == "plain":
+            front_str = str(front)
+        else:
+            # Auto-detect: check if it's a function
+            if callable(front):
+                front_str = format_code(extract_source(front), "python")
+            else:
+                # Default to styled card with gradient theme
+                front_str = auto_format_field(
+                    front, default_style="card", theme=front_theme or "random"
+                )
+
+        # Format back field
+        if back_type == "code":
+            back_str = format_code(str(back), back_lang or "python")
+        elif back_type == "card":
+            back_str = format_question(str(back), back_theme or "random")
+        elif back_type == "plain":
+            back_str = str(back)
+        else:
+            # Auto-detect: check if it's a function
+            if callable(back):
+                back_str = format_code(extract_source(back), "python")
+            else:
+                # Default to styled card with gradient theme
+                back_str = auto_format_field(
+                    back, default_style="card", theme=back_theme or "random"
+                )
+
         self._client.add_card(deck_id=self.id, front=front_str, back=back_str, tags=tags)
-        return self.sync()
+        self.sync()  # Refresh cards from database
+        # Return the newly added card (last one)
+        return (
+            self.cards[-1]
+            if self.cards
+            else Card(
+                id=None,
+                front=front_str,
+                back=back_str,
+                raw_text="",
+                edit_url=None,
+                deck=self,
+                _client=self._client,
+            )
+        )
 
     def delete(self) -> OperationResult:
         if not self._client:

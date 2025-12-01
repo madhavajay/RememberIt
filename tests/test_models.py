@@ -332,7 +332,8 @@ class TestCardUpdateWithImages:
 
         card = Card(id=1, front="Q", back="A", raw_text="", edit_url=None, _client=mock_client)
 
-        card.update(back="New answer text")
+        # Explicitly request plain text to preserve the string
+        card.update(back="New answer text", back_type="plain")
 
         assert mock_client.update_card.called
         call_args = mock_client.update_card.call_args

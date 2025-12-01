@@ -48,6 +48,22 @@ from .tools import TOOLS, is_solveit, load_tools, tools_info, tools_registered
 __version__ = "0.1.10"
 
 _client = RememberItClient()
+auto_sync = True  # Set to False to disable automatic syncing
+
+
+class _DecksProxy:
+    """Proxy object that makes decks both callable and subscriptable."""
+
+    def __call__(self) -> DeckCollection:
+        """Return cached decks (syncing down if empty and auto_sync is True)."""
+        return _client.decks(auto_sync=auto_sync)
+
+    def __getitem__(self, key: str | int) -> Deck:
+        """Get deck by name or index."""
+        return self()[key]
+
+
+decks = _DecksProxy()
 
 
 def login(
@@ -70,11 +86,6 @@ def logout() -> None:
 def sync() -> DeckCollection:
     """Sync down from AnkiWeb and return decks + cards."""
     return _client.sync()
-
-
-def decks() -> DeckCollection:
-    """Return cached decks (syncing down if empty)."""
-    return _client.decks()
 
 
 def create_deck(name: str) -> Deck:
@@ -252,9 +263,17 @@ def load_deck(data: str | Mapping[str, Any], *, deck_name: str | None = None) ->
 def _styled_output(html: str) -> None:
     """Display styled HTML in notebook, falls back to print."""
     try:
+        # Check if we're actually in an IPython/Jupyter environment
+        from IPython import get_ipython  # type: ignore[attr-defined]
         from IPython.display import HTML, display
 
-        display(HTML(html))  # type: ignore[no-untyped-call]
+        if get_ipython() is not None:  # type: ignore[no-untyped-call]
+            display(HTML(html))  # type: ignore[no-untyped-call]
+        else:
+            # IPython installed but not in interactive shell - use plain text
+            import re
+
+            print(re.sub(r"<[^>]+>", "", html))
     except ImportError:
         import re
 
@@ -439,10 +458,284 @@ v{__version__} • Custom templates: <code style="{cs}">~/.rememberit/templates/
     _styled_output(html)
 
 
+def signup() -> None:
+    """Show instructions for creating an AnkiWeb account."""
+    login_code = """import rememberit
+rememberit.login("your-email@example.com", "your-password")"""
+
+    html = f"""
+<div style="background:#1F1F1F;border:1px solid #3A3A3A;border-radius:12px;
+padding:20px 24px;margin:8px 0;font-family:system-ui,-apple-system,sans-serif;
+box-shadow:0 4px 12px rgba(0,0,0,0.15);">
+
+<div style="color:#F5F5F5;font-weight:700;font-size:1.3em;margin-bottom:16px;">
+📝 Create an AnkiWeb Account</div>
+
+<div style="color:#d4d4d4;font-size:1em;line-height:1.8;margin-bottom:16px;">
+To use RememberIt, you need a free AnkiWeb account.
+</div>
+
+<div style="color:#90EE90;font-weight:600;margin:16px 0 12px 0;">Setup Steps</div>
+<ol style="color:#d4d4d4;margin:0;padding-left:20px;font-size:0.95em;line-height:2;">
+<li>Visit: <a href="https://ankiweb.net/account/signup"
+style="color:#87CEEB;text-decoration:none;">https://ankiweb.net/account/signup</a></li>
+<li>Create your account with email and password</li>
+<li>Come back and login:</li>
+</ol>
+
+<div style="margin:16px 0;">
+{format_code(login_code, "python")}
+</div>
+
+<div style="color:#98FB98;font-size:0.95em;margin-top:16px;padding:12px;
+background:#2A2A2A;border-left:3px solid #90EE90;border-radius:4px;">
+✓ That's it! Your flashcards will sync to all your devices.
+</div>
+
+</div>"""
+    _styled_output(html)
+
+
+def tutorial() -> None:
+    """Step-by-step tutorial showing how to create flashcards."""
+    step1_code = """import rememberit
+
+# First time setup
+rememberit.login("your-email@example.com", "your-password")"""
+
+    step2_code = """# Sync and get your decks
+decks = rememberit.sync()
+print(f"You have {len(decks)} deck(s)")"""
+
+    step3_code = """# Create a new deck
+deck = decks.get_or_create("My Tutorial Deck")"""
+
+    step4_code = """# Add a simple styled text card
+rememberit.upsert_deck({
+    "name": "My Tutorial Deck",
+    "cards": [
+        {
+            "front": "What is RememberIt?",
+            "back": "A Python library for beautiful Anki flashcards"
+        }
+    ]
+})"""
+
+    step5_code = """# Add a code card - Method 1: Function object
+def factorial(n):
+    if n <= 1:
+        return 1
+    return n * factorial(n - 1)
+
+deck = rememberit.upsert_deck({
+    "name": "My Tutorial Deck",
+    "cards": [
+        {
+            "front": "Write a factorial function",
+            "back": factorial,  # Auto-extracts source!
+            "tags": "python recursion"
+        }
+    ]
+})  # Returns the deck!"""
+
+    step6_code = """# Add a code card - Method 2: Plain text with language
+sql_query = \"\"\"SELECT users.name, COUNT(orders.id) AS order_count
+FROM users
+LEFT JOIN orders ON users.id = orders.user_id
+WHERE orders.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+GROUP BY users.id
+HAVING order_count > 5
+ORDER BY order_count DESC;\"\"\"
+
+card = deck.add_card(
+    front="Find active users with 5+ orders in last 30 days",
+    back=sql_query,
+    back_type="code",
+    back_lang="sql",
+    tags="sql database"
+)  # Returns the card!
+
+print("✓ Added code cards with syntax highlighting!")"""
+
+    step7_code = """# Add an image card
+rememberit.upsert_deck({
+    "name": "My Tutorial Deck",
+    "cards": [
+        {
+            "front": "System Architecture",
+            "back": "~/diagrams/architecture.png"  # Auto-embedded!
+        }
+    ]
+})"""
+
+    step8_code = """# View your deck (both work!)
+deck = rememberit.decks["My Tutorial Deck"]  # Subscriptable!
+# or: deck = rememberit.decks()["My Tutorial Deck"]  # Callable
+print(f"Cards: {len(deck.cards)}")
+
+# Update a card
+card = deck.cards[0]
+card.update(back="Updated answer!")"""
+
+    auto_sync_code = """# Control automatic syncing
+rememberit.auto_sync = False  # Disable auto-sync
+decks = rememberit.decks()    # Won't sync automatically
+
+# Manual sync when needed
+rememberit.sync()
+
+rememberit.auto_sync = True   # Re-enable (default)"""
+
+    solveit_code = """# Load RememberIt tools into solve.it
+import rememberit
+
+# Check if running in solve.it
+if rememberit.is_solveit():
+    rememberit.load_tools()  # Adds Anki tools to AI agent
+    print("✓ RememberIt tools loaded!")
+
+# Now the AI agent can create flashcards for you!
+# Just ask: "Create flashcards about Python lists" """
+
+    custom_theme_code = """# Create a custom gradient theme
+from rememberit import save_template
+
+custom_html = '''
+<div style="background:linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+padding:24px;border-radius:12px;color:white;font-size:1.1em;
+box-shadow:0 4px 12px rgba(0,0,0,0.15);">
+{{CONTENT}}
+</div>'''
+
+save_template("purple-gradient", custom_html)
+
+# Use your custom theme
+deck.add_card(
+    front="Custom Theme Example",
+    front_type="card",
+    front_theme="purple-gradient",  # Your custom theme!
+    back="This card uses a custom gradient"
+)"""
+
+    html = f"""
+<div style="background:#1F1F1F;border:1px solid #3A3A3A;border-radius:12px;
+padding:20px 24px;margin:8px 0;font-family:system-ui,-apple-system,sans-serif;
+box-shadow:0 4px 12px rgba(0,0,0,0.15);">
+
+<div style="color:#F5F5F5;font-weight:700;font-size:1.4em;margin-bottom:8px;">
+🎓 RememberIt Tutorial</div>
+
+<div style="margin-bottom:16px;">
+<a href="https://github.com/madhavajay/RememberIt/blob/main/tutorial.ipynb"
+target="_blank" rel="noopener"
+style="color:#90EE90;text-decoration:none;font-size:0.9em;">
+📓 View interactive tutorial on GitHub →</a>
+</div>
+
+<div style="color:#d4d4d4;font-size:1em;line-height:1.8;margin-bottom:20px;">
+Follow these steps to create your first flashcards. Copy and run each code block in order.
+</div>
+
+<div style="color:#90EE90;font-weight:600;margin:20px 0 12px 0;">Step 1: Login</div>
+{format_code(step1_code, "python")}
+
+<div style="color:#87CEEB;font-weight:600;margin:20px 0 12px 0;">Step 2: Sync Your Decks</div>
+{format_code(step2_code, "python")}
+
+<div style="color:#DDA0DD;font-weight:600;margin:20px 0 12px 0;">Step 3: Create a Deck</div>
+{format_code(step3_code, "python")}
+
+<div style="color:#FFD700;font-weight:600;margin:20px 0 12px 0;">Step 4: Add Styled Text Card</div>
+{format_code(step4_code, "python")}
+<div style="color:#888;font-size:0.9em;margin-top:8px;">
+💡 Cards are auto-styled with gradient backgrounds by default
+</div>
+
+<div style="color:#FFA07A;font-weight:600;margin:20px 0 12px 0;">
+Step 5: Add Code Card (Function)</div>
+{format_code(step5_code, "python")}
+<div style="color:#888;font-size:0.9em;margin-top:8px;">
+💡 Pass function objects - source is extracted automatically!
+</div>
+
+<div style="color:#98FB98;font-weight:600;margin:20px 0 12px 0;">Step 6: Add Code Card (SQL)</div>
+{format_code(step6_code, "python")}
+<div style="color:#888;font-size:0.9em;margin-top:8px;">
+💡 Plain text with language specification for syntax highlighting
+</div>
+
+<div style="color:#87CEEB;font-weight:600;margin:20px 0 12px 0;">Step 7: Add Image Card</div>
+{format_code(step7_code, "python")}
+<div style="color:#888;font-size:0.9em;margin-top:8px;">
+💡 Images from paths, PIL objects, or matplotlib figures are auto-embedded
+</div>
+
+<div style="color:#DDA0DD;font-weight:600;margin:20px 0 12px 0;">Step 8: View & Update Cards</div>
+{format_code(step8_code, "python")}
+
+<div style="color:#FFA07A;font-weight:600;margin:20px 0 12px 0;">⚙️ Auto-Sync Control</div>
+{format_code(auto_sync_code, "python")}
+<div style="color:#888;font-size:0.9em;margin-top:8px;">
+💡 By default,
+<code style="background:#1a1a1a;padding:2px 6px;border-radius:3px;">decks()</code>
+syncs if cache is empty. Set
+<code style="background:#1a1a1a;padding:2px 6px;border-radius:3px;">auto_sync = False</code>
+for manual control.
+</div>
+
+<div style="color:#90EE90;font-weight:600;margin:20px 0 12px 0;">
+🤖 Solve.it Integration</div>
+{format_code(solveit_code, "python")}
+<div style="color:#888;font-size:0.9em;margin-top:8px;">
+💡 Use with <a href="https://solve.it.com/?via_id=eil03t43"
+style="color:#87CEEB;text-decoration:none;">solve.it</a> -
+AI agents can create flashcards automatically!
+</div>
+
+<div style="color:#DDA0DD;font-weight:600;margin:20px 0 12px 0;">
+🎨 Custom Themes</div>
+{format_code(custom_theme_code, "python")}
+<div style="color:#888;font-size:0.9em;margin-top:8px;">
+💡 Create your own card styles with custom HTML and CSS gradients
+</div>
+
+<div style="color:#FFD700;font-weight:600;margin:24px 0 12px 0;">✨ Next Steps</div>
+<ul style="color:#d4d4d4;margin:0;padding-left:20px;font-size:0.95em;line-height:2;">
+<li>Open Anki desktop app to review your cards</li>
+<li>Try different themes:
+<code style="background:#272822;color:#f8f8f2;padding:2px 6px;border-radius:3px;">blue</code>,
+<code style="background:#272822;color:#f8f8f2;padding:2px 6px;border-radius:3px;">purple</code>,
+<code style="background:#272822;color:#f8f8f2;padding:2px 6px;border-radius:3px;">gradient</code>
+</li>
+<li>Explore:
+<code style="background:#272822;color:#f8f8f2;padding:2px 6px;border-radius:3px;">
+rememberit.help()</code></li>
+<li>Preview examples:
+<code style="background:#272822;color:#f8f8f2;padding:2px 6px;border-radius:3px;">
+rememberit.examples.code()</code></li>
+<li>For AI agents:
+<code style="background:#272822;color:#f8f8f2;padding:2px 6px;border-radius:3px;">
+rememberit.llmtxt()</code></li>
+</ul>
+
+<div style="color:#98FB98;font-size:0.95em;margin-top:20px;padding:12px;
+background:#2A2A2A;border-left:3px solid #90EE90;border-radius:4px;">
+📚 Interactive Notebook: Check out
+<a href="https://github.com/madhavajay/RememberIt/blob/main/tutorial.ipynb"
+style="color:#90EE90;text-decoration:none;">tutorial.ipynb</a>
+for a complete walkthrough with live examples!
+</div>
+
+</div>"""
+    _styled_output(html)
+
+
 __all__ = [
     "__version__",
+    "auto_sync",
     "login",
     "logout",
+    "signup",
     "get_sync_key",
     "sync",
     "decks",
@@ -463,6 +756,7 @@ __all__ = [
     # Utilities
     "add_demo",
     "list_decks_and_cards",
+    "tutorial",
     "llmtxt",
     "help",
     # Classes
@@ -498,6 +792,42 @@ __all__ = [
     "TOOLS",
 ]
 
-# Auto-detect solveit and show hint
+# Show welcome message on import
+_solveit_section = ""
 if is_solveit():
-    print("Run rememberit.load_tools() to add Anki tools to solveit.")
+    _solveit_section = """
+<div style="color:#d4d4d4;font-size:0.95em;margin-top:8px;padding-top:8px;
+border-top:1px solid #3A3A3A;">
+🔧 Run <code style="background:#272822;color:#f8f8f2;padding:2px 6px;
+border-radius:4px;font-family:monospace;">rememberit.load_tools()</code>
+to add Anki tools to solve.it
+</div>"""
+
+_welcome_html = f"""
+<div style="background:#1F1F1F;border:1px solid #3A3A3A;border-radius:10px;
+padding:16px 20px;margin:8px 0;font-family:system-ui,-apple-system,sans-serif;
+box-shadow:0 4px 12px rgba(0,0,0,0.15);">
+
+<div style="color:#F5F5F5;font-weight:600;font-size:1.1em;margin-bottom:12px;">
+🎓 Welcome to RememberIt!</div>
+
+<div style="color:#d4d4d4;font-size:0.95em;line-height:1.6;">
+
+<div style="margin-bottom:8px;">
+💡 Run <code style="background:#272822;color:#f8f8f2;padding:2px 6px;
+border-radius:4px;font-family:monospace;">rememberit.tutorial()</code>
+to learn how to use it
+</div>
+
+<div>
+📓 <a href="https://github.com/madhavajay/RememberIt/blob/main/tutorial.ipynb"
+target="_blank" rel="noopener"
+style="color:#90EE90;text-decoration:none;">
+Interactive tutorial on GitHub →</a>
+</div>
+{_solveit_section}
+</div>
+
+</div>"""
+
+_styled_output(_welcome_html)
