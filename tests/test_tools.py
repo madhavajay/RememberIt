@@ -174,18 +174,13 @@ class TestToolsInfo:
 class TestHelpTools:
     """Tests for help/documentation tools."""
 
-    def test_show_help_displays_output(self) -> None:
-        from io import StringIO
-        from unittest.mock import patch
-
+    def test_show_help_returns_string(self) -> None:
         from rememberit.tools import show_help
 
-        with patch("sys.stdout", new=StringIO()) as fake_out:
-            result = show_help()
-            assert result is None
-            output = fake_out.getvalue()
-            assert "API" in output
-            assert "login" in output
+        result = show_help()
+        assert isinstance(result, str)
+        assert "API" in result
+        assert "login" in result
 
     def test_show_llmtxt_returns_string(self) -> None:
         from rememberit.tools import show_llmtxt

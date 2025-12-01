@@ -244,7 +244,19 @@ def add_cards(deck_name: str, cards_json: str) -> str:
     return f"✓ Added {added} cards to '{deck_name}'"
 
 
-def update_card(deck_name: str, card_front: str, new_front: str = "", new_back: str = "") -> str:
+def update_card(
+    deck_name: str,
+    card_front: str,
+    new_front: str = "",
+    new_back: str = "",
+    front_type: str | None = None,
+    back_type: str | None = None,
+    front_theme: str | None = None,
+    back_theme: str | None = None,
+    front_lang: str | None = None,
+    back_lang: str | None = None,
+    tags: str = "",
+) -> str:
     """Update an existing card by matching its front text.
 
     Args:
@@ -252,6 +264,23 @@ def update_card(deck_name: str, card_front: str, new_front: str = "", new_back: 
         card_front: Current front text to find the card
         new_front: New front text (empty = keep current)
         new_back: New back text (empty = keep current)
+        front_type: Optional - "code" or "plain" (omit to keep styled)
+        back_type: Optional - "code" or "plain" (omit to keep styled)
+        front_theme: Card theme for front
+        back_theme: Card theme for back
+        front_lang: Language for code highlighting (front)
+        back_lang: Language for code highlighting (back)
+        tags: Space-separated tags
+
+    **Examples:**
+    ```
+    # Update back to code
+    rememberit_update_card("Python", "Reverse a list", new_back="my_list[::-1]",
+                          back_type="code", back_lang="python")
+
+    # Change theme
+    rememberit_update_card("Python", "Important Q", front_theme="purple")
+    ```
     """
     import rememberit
 
@@ -260,7 +289,17 @@ def update_card(deck_name: str, card_front: str, new_front: str = "", new_back: 
         deck = collection[deck_name]
         deck.sync()
         card = deck.cards[card_front]
-        card.update(front=new_front if new_front else None, back=new_back if new_back else None)
+        card.update(
+            front=new_front if new_front else None,
+            back=new_back if new_back else None,
+            front_type=front_type,
+            back_type=back_type,
+            front_theme=front_theme,
+            back_theme=back_theme,
+            front_lang=front_lang,
+            back_lang=back_lang,
+            tags=tags if tags else "",
+        )
         return f"✓ Card updated in '{deck_name}'"
     except KeyError:
         return f"Card with front '{card_front}' not found in '{deck_name}'"
@@ -414,9 +453,9 @@ rememberit_add_card("Deck", "Q", "A", front_type="plain", back_type="plain")
 """
 
 
-def show_help() -> None:
+def show_help() -> str:
     """Show RememberIt API reference and available commands."""
-    content = """# RememberIt API Reference
+    return """# RememberIt API Reference
 
 ## Core API
 
@@ -554,7 +593,6 @@ deck.add_card("What is a dict?", "Key-value pairs")
 rememberit.sync()
 ```
 """
-    print(content)
 
 
 def show_llmtxt() -> str:
