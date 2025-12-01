@@ -7,7 +7,7 @@
 Python library for syncing flashcards with Anki.
 Designed to be easily used by LLM Agents.
 
-Don't just [solve.it.com](https://solve.it.com/?utm_source=rememberit) also RememberIt!
+Don't just [solve.it.com](https://solve.it.com/?via_id=eil03t43&utm_source=rememberit) also RememberIt!
 
 Create beautiful styled cards with syntax highlighting, embedded images, gradient themes, and more.
 
@@ -15,6 +15,16 @@ Create beautiful styled cards with syntax highlighting, embedded images, gradien
 
 ```bash
 pip install rememberit
+```
+
+## 📚 Tutorial
+
+**Interactive Jupyter Notebook:** [tutorial.ipynb](./tutorial.ipynb)
+
+Or run the built-in tutorial:
+```python
+import rememberit
+rememberit.tutorial()  # Interactive walkthrough
 ```
 
 ## Quick Start
@@ -134,10 +144,13 @@ Custom templates are stored in `~/.rememberit/templates/`
 
 | Function | Description |
 |----------|-------------|
-| `llmtxt()` | Show quickstart guide |
+| `signup()` | Show AnkiWeb registration instructions |
+| `tutorial()` | Interactive walkthrough (creates real cards!) |
+| `llmtxt()` | Show quickstart guide for AI agents |
 | `help()` | Show API reference |
 | `examples.code()` | Preview code formatting |
 | `examples.questions()` | Preview card themes |
+| `examples.images()` | Preview image examples |
 
 ## Export Deck as JSON
 

@@ -150,16 +150,27 @@ class RememberItClient:
         tmp = STORE_DIR / "_login.anki2"
 
         # Suppress Anki's debug output during collection operations
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            col = Collection(str(tmp))
+        col = None
+        try:
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                col = Collection(str(tmp))
 
-            def _do_login() -> Any:
-                return col.sync_login(username=user, password=pw, endpoint=endpoint)
+                def _do_login() -> Any:
+                    return col.sync_login(username=user, password=pw, endpoint=endpoint)
 
-            auth = _run_in_thread(_do_login)
-            col.close()
-
-        tmp.unlink(missing_ok=True)
+                auth = _run_in_thread(_do_login)
+        finally:
+            # Always close collection, even on error
+            if col is not None:
+                with (
+                    contextlib.redirect_stdout(io.StringIO()),
+                    contextlib.redirect_stderr(io.StringIO()),
+                ):
+                    col.close()
+            tmp.unlink(missing_ok=True)
         self.session = save_session(
             Session(
                 hkey=auth.hkey,
@@ -201,16 +212,18 @@ class RememberItClient:
 
         def _run() -> None:
             col = self._ensure_collection()
-            # Suppress Anki's debug output
-            with (
-                contextlib.redirect_stdout(io.StringIO()),
-                contextlib.redirect_stderr(io.StringIO()),
-            ):
-                col.sync_collection(
-                    auth=ProtoSyncAuth(hkey=session.hkey, endpoint=session.endpoint),
-                    sync_media=False,
-                )
-                col.close()
+            try:
+                # Suppress Anki's debug output
+                with (
+                    contextlib.redirect_stdout(io.StringIO()),
+                    contextlib.redirect_stderr(io.StringIO()),
+                ):
+                    col.sync_collection(
+                        auth=ProtoSyncAuth(hkey=session.hkey, endpoint=session.endpoint),
+                        sync_media=False,
+                    )
+            finally:
+                _close_collection_quiet(col)
 
         _run_in_thread(_run)
         self._deck_cache.clear()
@@ -225,27 +238,34 @@ class RememberItClient:
         session = self.session
 
         def _run() -> None:
-            # Suppress Anki's debug output
-            with (
-                contextlib.redirect_stdout(io.StringIO()),
-                contextlib.redirect_stderr(io.StringIO()),
-            ):
-                col = Collection(str(COLLECTION_PATH))
-                col.sync_collection(
-                    auth=ProtoSyncAuth(hkey=session.hkey, endpoint=session.endpoint),
-                    sync_media=False,
-                )
-                col.close()
+            col = None
+            try:
+                # Suppress Anki's debug output
+                with (
+                    contextlib.redirect_stdout(io.StringIO()),
+                    contextlib.redirect_stderr(io.StringIO()),
+                ):
+                    col = Collection(str(COLLECTION_PATH))
+                    col.sync_collection(
+                        auth=ProtoSyncAuth(hkey=session.hkey, endpoint=session.endpoint),
+                        sync_media=False,
+                    )
+            finally:
+                if col is not None:
+                    _close_collection_quiet(col)
 
         _run_in_thread(_run)
         self._deck_cache.clear()
         self._deck_order = []
 
     # --- Deck/card helpers ----------------------------------------------
-    def decks(self) -> DeckCollection:
-        """Return cached decks, syncing down if cache is empty."""
-        if not self._deck_cache:
+    def decks(self, *, auto_sync: bool = True) -> DeckCollection:
+        """Return cached decks, syncing down if cache is empty and auto_sync is True."""
+        if not self._deck_cache and auto_sync:
             self.sync_down()
+            self._refresh_cache_from_collection()
+        elif not self._deck_cache and not auto_sync:
+            # Load from local collection without syncing
             self._refresh_cache_from_collection()
         ordered = [self._deck_cache[k] for k in self._deck_order if k in self._deck_cache]
         return DeckCollection(ordered, client=self)
@@ -301,19 +321,43 @@ class RememberItClient:
     def create_deck(self, name: str) -> Deck:
         col = self._ensure_collection()
         deck_id = col.decks.id(name, create=True)
+
+        # Load actual cards from database (in case deck existed before)
+        cards: list[Card] = []
+        for cid in col.find_cards(f'deck:"{name}"'):
+            card_obj = col.get_card(cid)
+            note = card_obj.note()
+            front = note.fields[0] if len(note.fields) > 0 else ""
+            back = note.fields[1] if len(note.fields) > 1 else ""
+            cards.append(
+                Card(
+                    id=note.id,
+                    front=front,
+                    back=back,
+                    raw_text="\x1f".join(note.fields),
+                    edit_url=None,
+                    deck=None,
+                    _client=self,
+                )
+            )
+
         _close_collection_quiet(col)
+
         deck_row = {
             "id": deck_id,
             "name": name,
             "path": name,
-            "total": 0,
+            "total": len(cards),
             "new": "",
             "learn": "",
             "review": "",
-            "total_incl_children": 0,
+            "total_incl_children": len(cards),
         }
         deck_obj = Deck.from_row(deck_row, client=self)
-        deck_obj.cards = CardCollection([])
+        deck_obj.cards = CardCollection(cards)
+        for card in deck_obj.cards:
+            card.deck = deck_obj
+
         key = str(name)
         self._deck_cache[key] = deck_obj
         self._deck_order.append(key)

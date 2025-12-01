@@ -88,26 +88,24 @@ class TestToolsRegistered:
 class TestLoadTools:
     """Tests for load_tools function."""
 
-    def test_load_tools_returns_dict(self) -> None:
+    def test_load_tools_returns_none(self) -> None:
         from rememberit.tools import load_tools
 
-        result = load_tools()
-        assert isinstance(result, dict)
-        assert "solveit" in result
-        assert "registered" in result
-        assert "tools" in result
+        result = load_tools(silent=True)
+        assert result is None
 
     def test_load_tools_outside_solveit(self) -> None:
-        from rememberit.tools import load_tools
+        from rememberit.tools import is_solveit, load_tools
 
-        result = load_tools()
-        assert result["solveit"] is False
+        result = load_tools(silent=True)
+        assert result is None
+        assert is_solveit() is False
 
     def test_load_tools_silent_flag(self) -> None:
         from rememberit.tools import load_tools
 
         result = load_tools(silent=True)
-        assert isinstance(result, dict)
+        assert result is None
 
 
 class TestIndividualTools:
@@ -176,13 +174,18 @@ class TestToolsInfo:
 class TestHelpTools:
     """Tests for help/documentation tools."""
 
-    def test_show_help_returns_string(self) -> None:
+    def test_show_help_displays_output(self) -> None:
+        from io import StringIO
+        from unittest.mock import patch
+
         from rememberit.tools import show_help
 
-        result = show_help()
-        assert isinstance(result, str)
-        assert "API" in result
-        assert "login" in result
+        with patch("sys.stdout", new=StringIO()) as fake_out:
+            result = show_help()
+            assert result is None
+            output = fake_out.getvalue()
+            assert "API" in output
+            assert "login" in output
 
     def test_show_llmtxt_returns_string(self) -> None:
         from rememberit.tools import show_llmtxt

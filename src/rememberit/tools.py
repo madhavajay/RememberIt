@@ -92,42 +92,58 @@ def add_card(
     deck_name: str,
     front: str,
     back: str,
-    front_type: str = "card",
-    back_type: str = "card",
-    theme: str = "random",
+    front_type: str | None = None,
+    back_type: str | None = None,
+    front_theme: str | None = None,
+    back_theme: str | None = None,
     tags: str = "",
 ) -> str:
     """Add a flashcard to a deck.
 
-    For code answers, use `rememberit_add_code_card` or set back_type="code".
-    Use `rememberit_list_card_types()` to see all available types and themes.
+    By default, creates styled gradient cards. For code answers, use
+    `rememberit_add_code_card` or set back_type="code".
 
     Args:
         deck_name: Name of the deck (created if doesn't exist)
         front: Front side of the card (question)
         back: Back side of the card (answer)
-        front_type: "card" (styled, default), "code", or "plain"
-        back_type: "card" (styled, default), "code", or "plain"
-        theme: Card theme - "random" (default), "gradient", "dark", "light",
-               "blue", "purple", "green", "orange"
+        front_type: Optional - "code" or "plain" (default: styled card)
+        back_type: Optional - "code" or "plain" (default: styled card)
+        front_theme: Card theme - "random", "gradient", "dark", "light",
+                     "blue", "purple", "green", "orange" (default: "random")
+        back_theme: Theme for back side (default: "random")
         tags: Optional space-separated tags
+
+    **Examples:**
+    ```
+    # Styled card (default)
+    rememberit_add_card("Python", "What is a list?", "An ordered collection")
+
+    # Code answer
+    rememberit_add_card("Python", "Reverse a list", "my_list[::-1]", back_type="code")
+
+    # Themed card
+    rememberit_add_card("Python", "Important!", "Answer", front_theme="purple")
+    ```
     """
     import rememberit
 
     card: dict[str, str | None] = {
         "front": front,
         "back": back,
-        "front_type": front_type if front_type != "card" else None,
-        "back_type": back_type if back_type != "card" else None,
-        "front_theme": theme if front_type == "card" else None,
-        "back_theme": theme if back_type == "card" else None,
+        "front_type": front_type,
+        "back_type": back_type,
+        "front_theme": front_theme,
+        "back_theme": back_theme,
         "tags": tags if tags else None,
     }
     # Remove None values
-    filtered_card = {k: v for k, v in card.items() if v}
+    filtered_card = {k: v for k, v in card.items() if v is not None}
     card_data = {"name": deck_name, "cards": [filtered_card]}
     rememberit.upsert_deck(card_data)
-    return f"✓ Card added to '{deck_name}' (theme={theme})"
+    theme_used = front_theme or back_theme or "random"
+    theme_info = f" (theme={theme_used})" if front_theme or back_theme else ""
+    return f"✓ Card added to '{deck_name}'{theme_info}"
 
 
 def add_code_card(
@@ -178,7 +194,7 @@ def add_cards(deck_name: str, cards_json: str) -> str:
 
     Args:
         deck_name: Name of the deck (created if doesn't exist)
-        cards_json: JSON array of cards: [{"front": "...", "back": "...", "tags": "..."}]
+        cards_json: JSON array of cards
 
     **Card format:**
     ```json
@@ -189,8 +205,11 @@ def add_cards(deck_name: str, cards_json: str) -> str:
     ]
     ```
 
-    **Types:** "code" (syntax highlighted), "plain" (no styling), or omit for styled card
+    **Default:** Styled gradient cards (no type needed)
+    **Types:** "code" (syntax highlighted), "plain" (no styling)
     **Themes:** random, gradient, dark, light, blue, purple, green, orange
+
+    **Tip:** Use `rememberit.upsert_deck(deck_data)` for bulk add/update with deck name.
     """
     import json
 
@@ -207,13 +226,22 @@ def add_cards(deck_name: str, cards_json: str) -> str:
     for card in cards:
         front = card.get("front", "")
         back = card.get("back", "")
-        tags = card.get("tags", "")
         if front and back:
-            deck.add_card(front, back, tags)
+            # Pass all card parameters to add_card
+            deck.add_card(
+                front=front,
+                back=back,
+                tags=card.get("tags", ""),
+                front_type=card.get("front_type"),
+                back_type=card.get("back_type"),
+                front_lang=card.get("front_lang"),
+                back_lang=card.get("back_lang"),
+                front_theme=card.get("front_theme"),
+                back_theme=card.get("back_theme"),
+            )
             added += 1
 
-    tip = "**Tip:** Use `rememberit.upsert_deck(deck_data)` for bulk add/update."
-    return f"✓ Added {added} cards to '{deck_name}'\n\n{tip}"
+    return f"✓ Added {added} cards to '{deck_name}'"
 
 
 def update_card(deck_name: str, card_front: str, new_front: str = "", new_back: str = "") -> str:
@@ -346,11 +374,11 @@ def list_card_types() -> str:
     return """**Card Types:**
 | Type | Description |
 |------|-------------|
-| card | Styled card with gradient background (DEFAULT) |
+| (default) | Styled card with gradient background - just omit type parameter |
 | code | Syntax-highlighted code block |
 | plain | Plain text, no styling |
 
-**Themes (for type="card"):**
+**Themes (for styled cards):**
 | Theme | Description |
 |-------|-------------|
 | random | Random gradient (DEFAULT) |
@@ -366,131 +394,331 @@ def list_card_types() -> str:
 python, javascript, typescript, html, css, sql, bash, shell, json, yaml,
 rust, go, java, c, cpp, swift, kotlin, ruby, php, r, scala, haskell
 
-**Usage:**
-```
-rememberit_add_card("Deck", "Question", "Answer", theme="blue")
+**Usage Examples:**
+```python
+# Styled card (default - no type needed)
+rememberit_add_card("Deck", "Question", "Answer")
+
+# Themed styled card
+rememberit_add_card("Deck", "Important!", "Answer", front_theme="purple")
+
+# Code card
 rememberit_add_card("Deck", "Q", "code here", back_type="code")
+
+# Code card helper
 rememberit_add_code_card("Deck", "Q", "def foo(): pass", "python")
+
+# Plain text (no styling)
+rememberit_add_card("Deck", "Q", "A", front_type="plain", back_type="plain")
 ```
 """
 
 
-def show_help() -> str:
+def show_help() -> None:
     """Show RememberIt API reference and available commands."""
-    return """RememberIt API Reference:
+    content = """# RememberIt API Reference
 
-**Core API:**
-- rememberit.login(email, password) - Authenticate and save sync key
-- rememberit.sync() - Sync with AnkiWeb, return decks
-- rememberit.decks() - Return cached decks
-- rememberit.upsert_deck(data) - Add/update cards from dict (RECOMMENDED)
-- rememberit.create_deck(name) - Create a new deck
-- rememberit.delete_deck(deck) - Delete by name/id/object
+## Core API
 
-**Card Schema:**
+| Function | Description |
+|----------|-------------|
+| `login(email, password)` | Authenticate and save sync key |
+| `logout()` | Clear saved credentials |
+| `sync()` | Sync with AnkiWeb, return decks |
+| `decks()` | Return cached decks (auto-syncs if empty) |
+| `decks["name"]` | Get deck by name (subscriptable) |
+| `create_deck(name)` | Create a new deck |
+| `delete_deck(deck)` | Delete by name/id/object |
+| `rename_deck(deck, new_name)` | Rename a deck |
+| `upsert_deck(data)` | Add/update cards from dict/JSON |
+
+## Configuration
+
+```python
+rememberit.auto_sync = False  # Disable auto-sync on decks()
+```
+
+## Working with Decks
+
+```python
+# Get all decks
+decks = rememberit.decks()
+
+# Access deck by name or index
+deck = rememberit.decks["Python Basics"]  # By name
+deck = decks[0]  # By index
+
+# Create/update deck with cards
+deck = rememberit.upsert_deck({
+    "name": "My Deck",
+    "cards": [
+        {"front": "Question?", "back": "Answer"},  # Styled card (default)
+        {"front": "Code?", "back": "x = 1", "back_type": "code"},
+    ]
+})
+```
+
+## Adding Cards
+
+```python
+# Simple styled card (default)
+card = deck.add_card(front="What is Python?", back="A programming language")
+
+# Code card
+card = deck.add_card(
+    front="Reverse a list",
+    back="my_list[::-1]",
+    back_type="code",
+    back_lang="python"
+)
+
+# Themed card
+card = deck.add_card(
+    front="Important concept",
+    back="The answer",
+    front_theme="purple",
+    back_theme="dark"
+)
+
+# Plain text (no styling)
+card = deck.add_card(
+    front="Simple question",
+    back="Simple answer",
+    front_type="plain",
+    back_type="plain"
+)
+```
+
+## Updating Cards
+
+```python
+# Get card and update
+card = deck.cards[0]  # By index
+card = deck.cards["What is Python?"]  # By fuzzy search
+
+# Update with styled text (default)
+card.update(back="New answer")
+
+# Update with code
+card.update(back="def foo(): pass", back_type="code", back_lang="python")
+
+# Update with plain text
+card.update(back="Plain answer", back_type="plain")
+```
+
+## Card Schema
+
 ```python
 {
     "name": "Deck Name",
     "cards": [
         {
-            "front": str,        # Question text
-            "back": str,         # Answer text
-            "front_type": str,   # "code" | "plain" | omit for styled
-            "back_type": str,
-            "front_lang": str,   # For code: python, javascript, etc.
+            "front": str,            # Question text
+            "back": str,             # Answer text
+            "front_type": str,       # "code" | "plain" | omit for styled (default)
+            "back_type": str,        # "code" | "plain" | omit for styled (default)
+            "front_lang": str,       # For code: python, javascript, etc.
             "back_lang": str,
-            "front_theme": str,  # gradient, dark, light, blue, purple, green, orange
+            "front_theme": str,      # random, gradient, dark, light, blue, purple, green, orange
             "back_theme": str,
-            "tags": str,         # Space-separated tags
+            "tags": str,             # Space-separated tags
         }
     ]
 }
 ```
 
-**Workflow to edit existing deck:**
-1. `rememberit_list_decks()` - See available decks
-2. `rememberit_deck_as_dict("DeckName")` - Get deck as editable dict
-3. Edit the cards as needed
-4. `rememberit.upsert_deck(deck_data)` - Submit changes
+**Default Behavior:** Cards are styled with gradient themes unless you
+specify `type="code"` or `type="plain"`
 
-**Workflow to create new deck:**
+## Workflow Example
+
 ```python
-deck_data = {
-    "name": "My New Deck",
+import rememberit
+
+# Login once
+rememberit.login("you@example.com", "password")
+
+# Create/update deck
+deck = rememberit.upsert_deck({
+    "name": "Python Basics",
     "cards": [
-        {"front": "Question?", "back": "Answer"},
-        {"front": "Code Q", "back": "def foo(): pass", "back_type": "code"},
+        {"front": "What is a list?", "back": "An ordered collection"},
+        {"front": "Create list", "back": "[1, 2, 3]", "back_type": "code"},
     ]
-}
-rememberit.upsert_deck(deck_data)
+})
+
+# Add more cards
+deck.add_card("What is a dict?", "Key-value pairs")
+
+# Sync to AnkiWeb
+rememberit.sync()
 ```
 """
+    print(content)
 
 
 def show_llmtxt() -> str:
     """Show quickstart guide for LLM editing of Anki cards."""
-    return """RememberIt Quickstart for LLMs:
+    return """# RememberIt Quickstart for LLMs
 
-**Create cards:**
+## Create Styled Cards (Default)
+
 ```python
 import rememberit
-deck_data = {
+
+# Simple styled cards - gradient backgrounds by default
+deck = rememberit.upsert_deck({
     "name": "My Deck",
     "cards": [
-        {"front": "Question?", "back": "Answer"},
-        {"front": "Code question", "back": "def foo(): pass", "back_type": "code"},
+        {"front": "What is Python?", "back": "A programming language"},
+        {"front": "What is a list?", "back": "An ordered collection"},
     ]
-}
-rememberit.upsert_deck(deck_data)
+})
 ```
 
-**Card types:**
-- (default): Styled card with gradient background
-- "code": Syntax-highlighted code block
-- "plain": Plain text, no formatting
+## Add Code Cards
 
-**Languages:** python, javascript, typescript, html, css, sql, bash, json, rust, go, java, c, cpp
+```python
+# Syntax-highlighted code
+deck = rememberit.upsert_deck({
+    "name": "Programming",
+    "cards": [
+        {
+            "front": "Reverse a string in Python",
+            "back": "text[::-1]",
+            "back_type": "code",
+            "back_lang": "python"
+        }
+    ]
+})
+```
 
-**Themes for cards:** random (default), gradient, dark, light, blue, purple, green, orange
+## Working with Existing Decks
+
+```python
+# Get deck by name (subscriptable)
+deck = rememberit.decks["Python Basics"]
+
+# Add cards directly to deck
+card = deck.add_card("New question?", "New answer")  # Returns Card object
+
+# Update existing card
+card.update(back="Updated answer", back_theme="purple")
+```
+
+## Card Types & Options
+
+**Types:**
+- **(default)**: Styled gradient card - just omit the type
+- `"code"`: Syntax-highlighted code block
+- `"plain"`: Plain text, no styling
+
+**Themes** (for styled cards):
+`random` (default), `gradient`, `dark`, `light`, `blue`, `purple`, `green`, `orange`
+
+**Languages** (for code):
+`python`, `javascript`, `typescript`, `html`, `css`, `sql`, `bash`, `json`, `yaml`,
+`rust`, `go`, `java`, `c`, `cpp`, `swift`, `kotlin`, `ruby`, `php`
+
+## Configuration
+
+```python
+rememberit.auto_sync = False  # Disable auto-sync on decks()
+```
+
+## Quick Reference
+
+```python
+# Access
+rememberit.decks["DeckName"]  # Get by name
+deck.cards[0]                  # Get first card
+deck.cards["Question text"]    # Fuzzy search
+
+# Add
+deck.add_card(front, back)     # Simple (returns Card)
+deck.add_card(front, back, back_type="code")  # Code card
+
+# Update
+card.update(back="New")        # Styled (default)
+card.update(back="x=1", back_type="code")  # Code
+
+# Bulk operations
+rememberit.upsert_deck(data)   # Add/update many cards
+```
 """
 
 
 def show_examples() -> str:
     """Show example card formats for different types."""
-    return """RememberIt Card Examples:
+    return """# RememberIt Card Examples
 
-**Styled question card (default):**
+## 1. Styled Card (Default - No Type Needed)
+```json
 {"front": "What is Python?", "back": "A programming language"}
+```
+Creates a beautiful gradient card automatically!
 
-**Code answer:**
+## 2. Code Answer
+```json
 {
     "front": "Write a function to add two numbers",
     "back": "def add(a, b):\\n    return a + b",
-    "back_type": "code"
+    "back_type": "code",
+    "back_lang": "python"
 }
+```
 
-**Code question and answer:**
+## 3. Code Question and Answer
+```json
 {
     "front": "def mystery(n):\\n    return n * 2",
     "front_type": "code",
-    "back": "Doubles the input number",
+    "front_lang": "python",
+    "back": "Doubles the input number"
 }
+```
 
-**Themed card:**
+## 4. Themed Styled Card
+```json
 {
     "front": "Important concept",
     "front_theme": "purple",
     "back": "The explanation",
     "back_theme": "dark"
 }
+```
 
-**Plain text (no styling):**
+## 5. Plain Text (No Styling)
+```json
 {
     "front": "Simple question",
     "front_type": "plain",
     "back": "Simple answer",
     "back_type": "plain"
 }
+```
+
+## Complete Deck Example
+```python
+import rememberit
+
+deck = rememberit.upsert_deck({
+    "name": "Mixed Cards",
+    "cards": [
+        # Styled (default)
+        {"front": "What is REST?", "back": "Representational State Transfer"},
+
+        # Code
+        {"front": "HTTP GET", "back": "GET /api/users", "back_type": "code"},
+
+        # Themed
+        {"front": "Key Concept", "back": "Important!", "front_theme": "purple"},
+
+        # Plain
+        {"front": "Note", "back": "Plain text", "back_type": "plain"}
+    ]
+})
+```
 """
 
 
@@ -522,7 +750,7 @@ def tools_registered() -> bool:
     return _TOOLS_REGISTERED
 
 
-def load_tools(silent: bool = False, force: bool = False) -> dict[str, object]:
+def load_tools(silent: bool = False, force: bool = False) -> None:
     """Load rememberit tools into solveit dialog.
 
     Registers tools with the LLM via add_msg + mk_toollist.
@@ -562,19 +790,69 @@ def load_tools(silent: bool = False, force: bool = False) -> dict[str, object]:
 
         _TOOLS_REGISTERED = True
 
-    return {
-        "solveit": in_solveit,
-        "registered": _TOOLS_REGISTERED,
-        "tools": [f"rememberit_{t.__name__}" for t in TOOLS] if not _TOOLS_REGISTERED else [],
-    }
+    # Display status with styled output (unless silent)
+    if not silent:
+        status_color = "#90EE90" if _TOOLS_REGISTERED else "#ff6b6b"
+        status_icon = "✅" if _TOOLS_REGISTERED else "⚪"
+        status_text = "Registered" if _TOOLS_REGISTERED else "Not registered"
+
+        env_color = "#90EE90" if in_solveit else "#87CEEB"
+        env_icon = "🎯" if in_solveit else "📓"
+        env_text = "solve.it" if in_solveit else "Jupyter"
+
+        tool_list = [f"rememberit_{t.__name__}" for t in TOOLS]
+        tools_html = "".join(
+            f'<div style="color:#d4d4d4;font-size:0.9em;padding:2px 0;">• {tool}</div>'
+            for tool in tool_list
+        )
+
+        html = f"""
+<div style="background:#1F1F1F;border:1px solid #3A3A3A;border-radius:10px;
+padding:16px 20px;margin:8px 0;font-family:system-ui,-apple-system,sans-serif;
+box-shadow:0 4px 12px rgba(0,0,0,0.15);">
+
+<div style="color:#F5F5F5;font-weight:600;font-size:1.1em;margin-bottom:12px;">
+🔧 RememberIt Tools</div>
+
+<div style="display:flex;gap:12px;margin-bottom:16px;">
+<span style="background:#1a2e1a;color:{status_color};padding:4px 10px;
+border-radius:6px;font-size:0.85em;">{status_icon} {status_text}</span>
+<span style="background:#1a2a3a;color:{env_color};padding:4px 10px;
+border-radius:6px;font-size:0.85em;">{env_icon} {env_text}</span>
+</div>
+
+<div style="color:#d4d4d4;font-size:0.95em;margin-bottom:12px;">
+{len(tool_list)} tools available:
+</div>
+
+<div style="margin-bottom:12px;">
+{tools_html}
+</div>
+
+<div style="color:#888;font-size:0.85em;">
+Run <code style="background:#272822;color:#f8f8f2;padding:2px 6px;
+border-radius:4px;font-family:monospace;">rememberit_show_help()</code>
+for API reference
+</div>
+
+</div>"""
+        _styled_html(html)
 
 
 def _styled_html(html: str) -> None:
     """Display styled HTML in notebook, falls back to print."""
     try:
+        # Check if we're actually in an IPython/Jupyter environment
+        from IPython import get_ipython  # type: ignore[attr-defined]
         from IPython.display import HTML, display
 
-        display(HTML(html))  # type: ignore[no-untyped-call]
+        if get_ipython() is not None:  # type: ignore[no-untyped-call]
+            display(HTML(html))  # type: ignore[no-untyped-call]
+        else:
+            # IPython installed but not in interactive shell - use plain text
+            import re
+
+            print(re.sub(r"<[^>]+>", "", html))
     except ImportError:
         import re
 
