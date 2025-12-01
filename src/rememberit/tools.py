@@ -96,6 +96,8 @@ def add_card(
     back_type: str | None = None,
     front_theme: str | None = None,
     back_theme: str | None = None,
+    front_lang: str | None = None,
+    back_lang: str | None = None,
     tags: str = "",
 ) -> str:
     """Add a flashcard to a deck.
@@ -112,6 +114,8 @@ def add_card(
         front_theme: Card theme - "random", "gradient", "dark", "light",
                      "blue", "purple", "green", "orange" (default: "random")
         back_theme: Theme for back side (default: "random")
+        front_lang: Language for code highlighting (e.g., "python", "javascript")
+        back_lang: Language for code highlighting (e.g., "python", "javascript")
         tags: Optional space-separated tags
 
     **Examples:**
@@ -119,8 +123,9 @@ def add_card(
     # Styled card (default)
     rememberit_add_card("Python", "What is a list?", "An ordered collection")
 
-    # Code answer
-    rememberit_add_card("Python", "Reverse a list", "my_list[::-1]", back_type="code")
+    # Code answer with language
+    rememberit_add_card("Python", "Reverse a list", "my_list[::-1]",
+                       back_type="code", back_lang="python")
 
     # Themed card
     rememberit_add_card("Python", "Important!", "Answer", front_theme="purple")
@@ -135,6 +140,8 @@ def add_card(
         "back_type": back_type,
         "front_theme": front_theme,
         "back_theme": back_theme,
+        "front_lang": front_lang,
+        "back_lang": back_lang,
         "tags": tags if tags else None,
     }
     # Remove None values
