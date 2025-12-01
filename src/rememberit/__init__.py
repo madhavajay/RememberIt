@@ -45,7 +45,7 @@ from .templates import (
 )
 from .tools import TOOLS, is_solveit, load_tools, tools_info, tools_registered
 
-__version__ = "0.1.12"
+__version__ = "0.1.13"
 
 _client = RememberItClient()
 auto_sync = True  # Set to False to disable automatic syncing
